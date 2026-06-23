@@ -5,11 +5,14 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Issue, UpdateIssueRequest } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
+import { firstCompatibleRuntimeForAgent } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { pinListOptions, useCreatePin, useDeletePin } from "@multica/core/pins";
+import { runtimeListOptions } from "@multica/core/runtimes/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
@@ -44,6 +47,8 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
     ...pinListOptions(wsId, userId ?? ""),
     enabled: !!userId,
   });
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
 
   const isPinned =
     !!issue &&
@@ -64,8 +69,23 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
   const updateField = useCallback(
     (updates: Partial<UpdateIssueRequest>) => {
       if (!issueId) return;
+      const requestUpdates = { ...updates };
+      if (
+        requestUpdates.assignee_type === "agent" &&
+        requestUpdates.assignee_id &&
+        !requestUpdates.runtime_id
+      ) {
+        const agent = agents.find((item) => item.id === requestUpdates.assignee_id);
+        const runtime = agent
+          ? firstCompatibleRuntimeForAgent(agent, runtimes, {
+              ownerId: userId,
+              onlineOnly: true,
+            })
+          : undefined;
+        if (runtime) requestUpdates.runtime_id = runtime.id;
+      }
       updateIssue.mutate(
-        { id: issueId, ...updates },
+        { id: issueId, ...requestUpdates },
         {
           onError: (err) =>
             toast.error(
@@ -78,8 +98,8 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
       // Hint: assigning an agent to a backlog issue won't trigger execution
       // until the issue is moved to an active status.
       if (
-        updates.assignee_type === "agent" &&
-        updates.assignee_id &&
+        requestUpdates.assignee_type === "agent" &&
+        requestUpdates.assignee_id &&
         issueStatus === "backlog" &&
         typeof window !== "undefined" &&
         localStorage.getItem(BACKLOG_HINT_LS_KEY) !== "true"
@@ -87,7 +107,7 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
         openModal("issue-backlog-agent-hint", { issueId });
       }
     },
-    [issueId, issueStatus, updateIssue, openModal, t],
+    [agents, issueId, issueStatus, openModal, runtimes, t, updateIssue, userId],
   );
 
   const togglePin = useCallback(() => {

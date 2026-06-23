@@ -43,6 +43,7 @@ import {
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
+import { sanitizeTaskMessagePayload } from "../api/schemas";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
 import type {
@@ -814,7 +815,7 @@ export function useRealtimeSync(
     // DB remains authoritative.
 
     const unsubTaskMessage = ws.on("task:message", (p) => {
-      const payload = p as TaskMessagePayload;
+      const payload = sanitizeTaskMessagePayload(p as TaskMessagePayload);
       qc.setQueryData<TaskMessagePayload[]>(
         ["task-messages", payload.task_id],
         (old = []) => {

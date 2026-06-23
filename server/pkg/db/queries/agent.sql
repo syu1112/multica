@@ -19,9 +19,10 @@ WHERE id = $1 AND workspace_id = $2;
 -- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, runtime_mode,
-    runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
-    instructions, custom_env, custom_args, mcp_config, model, thinking_level
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+    runtime_config, runtime_id, runtime_provider, runtime_profile_id,
+    visibility, max_concurrent_tasks, owner_id, instructions, custom_env,
+    custom_args, mcp_config, model, thinking_level
+) VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg('runtime_id'), $7, sqlc.narg('runtime_profile_id'), $8, $9, $10, $11, $12, $13, $14, $15, $16)
 RETURNING *;
 
 -- name: UpdateAgent :one
@@ -31,7 +32,17 @@ UPDATE agent SET
     avatar_url = COALESCE(sqlc.narg('avatar_url'), avatar_url),
     runtime_config = COALESCE(sqlc.narg('runtime_config'), runtime_config),
     runtime_mode = COALESCE(sqlc.narg('runtime_mode'), runtime_mode),
-    runtime_id = COALESCE(sqlc.narg('runtime_id'), runtime_id),
+    runtime_id = CASE
+        WHEN sqlc.narg('runtime_provider')::text IS NOT NULL
+             OR sqlc.narg('runtime_profile_id')::uuid IS NOT NULL THEN NULL
+        ELSE COALESCE(sqlc.narg('runtime_id'), runtime_id)
+    END,
+    runtime_provider = COALESCE(sqlc.narg('runtime_provider'), runtime_provider),
+    runtime_profile_id = CASE
+        WHEN sqlc.narg('runtime_profile_id')::uuid IS NULL
+             AND sqlc.narg('runtime_provider')::text IS NOT NULL THEN NULL
+        ELSE COALESCE(sqlc.narg('runtime_profile_id'), runtime_profile_id)
+    END,
     visibility = COALESCE(sqlc.narg('visibility'), visibility),
     status = COALESCE(sqlc.narg('status'), status),
     max_concurrent_tasks = COALESCE(sqlc.narg('max_concurrent_tasks'), max_concurrent_tasks),
@@ -76,8 +87,9 @@ RETURNING *;
 
 -- name: ArchiveAgentsByRuntime :many
 -- Bulk-archives every active agent bound to any runtime in the given set.
--- Used when revoking a leaving member's runtimes so agents pinned to those
--- runtimes can no longer be assigned new work. Returns the affected rows so
+-- Used by membership-removal cleanup to archive workspace-owned agents pinned
+-- to a leaving member's private runtimes. It must not disable, delete, or
+-- otherwise mutate the runtime rows themselves. Returns the affected rows so
 -- the caller can broadcast agent:archived per agent.
 UPDATE agent
 SET archived_at = now(), archived_by = @archived_by, updated_at = now()

@@ -38,6 +38,8 @@ function makeAgent(overrides: Partial<Agent> & Pick<Agent, "id" | "name" | "owne
     id: overrides.id,
     name: overrides.name,
     owner_id: overrides.owner_id,
+    runtime_provider: overrides.runtime_provider ?? "claude",
+    runtime_profile_id: overrides.runtime_profile_id ?? null,
   };
 }
 

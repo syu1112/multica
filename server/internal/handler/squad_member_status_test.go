@@ -1,6 +1,10 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -9,9 +13,9 @@ import (
 
 func TestDeriveSquadMemberStatus(t *testing.T) {
 	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
-	online := pgtype.Text{String: "online", Valid: true}
-	offline := pgtype.Text{String: "offline", Valid: true}
-	missing := pgtype.Text{}
+	online := "online"
+	offline := "offline"
+	missing := ""
 
 	tsAgo := func(d time.Duration) pgtype.Timestamptz {
 		return pgtype.Timestamptz{Time: now.Add(-d), Valid: true}
@@ -21,7 +25,7 @@ func TestDeriveSquadMemberStatus(t *testing.T) {
 	cases := []struct {
 		name          string
 		archived      bool
-		runtimeStatus pgtype.Text
+		runtimeStatus string
 		lastSeen      pgtype.Timestamptz
 		hasActiveTask bool
 		want          string
@@ -49,4 +53,75 @@ func TestDeriveSquadMemberStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestListSquadMemberStatus_DoesNotExposeOtherMemberRuntimeHealth(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID, runtimeOwnerID, _ := runtimeVisibilityFixture(t)
+	adminUserID := createRuntimeVisibilityAdmin(t)
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, runtime_provider, visibility, max_concurrent_tasks, owner_id,
+			instructions, custom_env, custom_args
+		)
+		VALUES ($1, 'squad-runtime-privacy-agent', '', 'local', '{}'::jsonb,
+		        $2, 'visibility_test_provider', 'workspace', 1, $3, '', '{}'::jsonb, '[]'::jsonb)
+		RETURNING id
+	`, testWorkspaceID, runtimeID, runtimeOwnerID).Scan(&agentID); err != nil {
+		t.Fatalf("create squad privacy agent: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+	})
+
+	var squadID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO squad (workspace_id, name, description, leader_id, creator_id)
+		VALUES ($1, 'Squad Runtime Privacy', '', $2, $3)
+		RETURNING id
+	`, testWorkspaceID, agentID, runtimeOwnerID).Scan(&squadID); err != nil {
+		t.Fatalf("create squad: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM squad WHERE id = $1`, squadID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO squad_member (squad_id, member_type, member_id, role)
+		VALUES ($1, 'agent', $2, 'leader')
+	`, squadID, agentID); err != nil {
+		t.Fatalf("add squad member: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequestAs(adminUserID, http.MethodGet, "/api/workspaces/"+testWorkspaceID+"/squads/"+squadID+"/members/status", nil)
+	req = withURLParams(req, "workspaceId", testWorkspaceID, "id", squadID)
+	testHandler.ListSquadMemberStatus(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListSquadMemberStatus as workspace admin: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp SquadMemberStatusListResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode squad status: %v", err)
+	}
+	for _, member := range resp.Members {
+		if member.MemberID == agentID {
+			if member.Status == nil {
+				t.Fatal("agent member status is nil")
+			}
+			if *member.Status == "idle" {
+				t.Fatalf("workspace admin must not see another member's online runtime as idle")
+			}
+			return
+		}
+	}
+	t.Fatalf("agent %s missing from squad status response", agentID)
 }

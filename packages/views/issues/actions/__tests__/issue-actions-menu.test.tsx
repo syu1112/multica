@@ -58,6 +58,13 @@ vi.mock("@multica/core/workspace/queries", () => ({
   }),
 }));
 
+vi.mock("@multica/core/runtimes/queries", () => ({
+  runtimeListOptions: () => ({
+    queryKey: ["workspaces", "ws-1", "runtimes"],
+    queryFn: () => Promise.resolve([]),
+  }),
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: (_t: string, _id: string) => "" }),
 }));

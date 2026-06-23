@@ -222,3 +222,61 @@ func TestQuickCreateIssueParentTrustBoundary(t *testing.T) {
 		}
 	})
 }
+
+func TestQuickCreateIssueDaemonVersionErrorDoesNotReturnRuntimeID(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	var runtimeID, agentID string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id FROM agent_runtime WHERE workspace_id = $1 LIMIT 1`,
+		testWorkspaceID,
+	).Scan(&runtimeID); err != nil {
+		t.Fatalf("fetch runtime: %v", err)
+	}
+	if err := testPool.QueryRow(ctx,
+		`SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`,
+		testWorkspaceID,
+	).Scan(&agentID); err != nil {
+		t.Fatalf("fetch agent: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`UPDATE agent_runtime SET metadata = jsonb_build_object('cli_version', '0.2.20'::text) WHERE id = $1`,
+		runtimeID,
+	); err != nil {
+		t.Fatalf("set old runtime cli_version: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(),
+			`UPDATE agent_runtime SET metadata = '{}'::jsonb WHERE id = $1`, runtimeID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues/quick-create", map[string]any{
+		"agent_id": agentID,
+		"prompt":   "Create an issue with an old daemon",
+	})
+	testHandler.QuickCreateIssue(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["code"] != "daemon_version_unsupported" {
+		t.Fatalf("code = %v, want daemon_version_unsupported; response=%v", resp["code"], resp)
+	}
+	if _, ok := resp["runtime_id"]; ok {
+		t.Fatalf("daemon version error leaked runtime_id: %v", resp)
+	}
+	if resp["current_version"] != "0.2.20" {
+		t.Fatalf("current_version = %v, want 0.2.20", resp["current_version"])
+	}
+	if resp["min_version"] != agent.MinQuickCreateCLIVersion {
+		t.Fatalf("min_version = %v, want %s", resp["min_version"], agent.MinQuickCreateCLIVersion)
+	}
+}

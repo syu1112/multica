@@ -14,7 +14,8 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, AgentRuntime } from "@multica/core/types";
-import { providerSupportsMcpConfig } from "@multica/core/agents";
+import { providerSupportsMcpConfig, runtimeForAgentCapability } from "@multica/core/agents";
+import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { larkInstallationsOptions } from "@multica/core/lark";
 import {
@@ -122,6 +123,7 @@ export function AgentOverviewPane({
 }: AgentOverviewPaneProps) {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const [activeTab, setActiveTab] = useState<DetailTab>("activity");
   const [activeDirty, setActiveDirty] = useState(false);
   // Holds the destination when a tab change is intercepted by the dirty
@@ -129,9 +131,10 @@ export function AgentOverviewPane({
   // "open".
   const [pendingTab, setPendingTab] = useState<DetailTab | null>(null);
 
-  const runtime = agent.runtime_id
-    ? runtimes.find((r) => r.id === agent.runtime_id) ?? null
-    : null;
+  const runtimesById = new Map(runtimes.map((r) => [r.id, r]));
+  const runtime = runtimeForAgentCapability(agent, runtimes, runtimesById, {
+    ownerId: currentUserId,
+  });
 
   // Cached per-workspace and shared with the inspector's bind button, so this
   // is at most one extra GET per workspace. We only read `configured` to

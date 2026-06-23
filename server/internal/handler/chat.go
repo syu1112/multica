@@ -15,6 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -491,6 +492,14 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	// the task initiator — surfaced to the agent under `## Task Initiator`.
 	task, err := h.TaskService.EnqueueChatTask(r.Context(), session, parseUUID(userID))
 	if err != nil {
+		if reason, ok := runtimeResolveFailureReason(err); ok {
+			writeAgentUnavailable(w, reason)
+			return
+		}
+		if errors.Is(err, service.ErrChatTaskAgentNoRuntime) {
+			writeAgentUnavailable(w, "no compatible runtime for requester")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to enqueue chat task: "+err.Error())
 		return
 	}
@@ -934,7 +943,7 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := CancelTaskByUserResponse{
-		AgentTaskResponse: taskToResponse(cancelled.Task, workspaceID),
+		AgentTaskResponse: taskToAuditResponse(cancelled.Task, workspaceID),
 	}
 	if cancelled.CancelledChatMessage != nil {
 		attachments := make([]AttachmentResponse, 0, len(cancelled.CancelledChatMessage.Attachments))

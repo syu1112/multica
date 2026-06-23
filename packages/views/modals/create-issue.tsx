@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "../navigation";
 import {
@@ -39,11 +39,15 @@ import { StatusIcon, StatusPicker, PriorityPicker, AssigneePicker, StartDatePick
 import { BacklogAgentHintContent } from "../issues/components/backlog-agent-hint-dialog";
 import { ProjectPicker } from "../projects/components/project-picker";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { useAuthStore } from "@multica/core/auth";
+import { firstCompatibleRuntimeForAgent } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
 import { useCreateModeStore } from "@multica/core/issues/stores/create-mode-store";
 import { useQuickCreateStore } from "@multica/core/issues/stores/quick-create-store";
 import { issueDetailOptions } from "@multica/core/issues/queries";
+import { runtimeListOptions } from "@multica/core/runtimes/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { useCreateIssue, useUpdateIssue } from "@multica/core/issues/mutations";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import {
@@ -67,6 +71,20 @@ function toDraftAttachment(attachment: Attachment): Attachment {
     // re-resolve through id/markdown_url when needed.
     download_url: "",
   };
+}
+
+export function manualCreateSubmitDisabled({
+  hasTitle,
+  submitting,
+  assigneeType,
+  selectedRuntimeId,
+}: {
+  hasTitle: boolean;
+  submitting: boolean;
+  assigneeType: IssueAssigneeType | undefined;
+  selectedRuntimeId: string;
+}) {
+  return !hasTitle || submitting || (assigneeType === "agent" && !selectedRuntimeId);
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +171,9 @@ export function ManualCreatePanel({
   // Fetch parent issue details for the chip (status/identifier/title).
   // List cache usually has it already, so this resolves synchronously.
   const wsId = useWorkspaceId();
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: parentIssue } = useQuery({
     ...issueDetailOptions(wsId, parentIssueId ?? ""),
     enabled: !!parentIssueId,
@@ -203,6 +224,34 @@ export function ManualCreatePanel({
 
   const createIssueMutation = useCreateIssue();
   const updateIssueMutation = useUpdateIssue();
+  const selectedAgent = useMemo(
+    () =>
+      assigneeType === "agent" && assigneeId
+        ? agents.find((agent) => agent.id === assigneeId)
+        : undefined,
+    [agents, assigneeId, assigneeType],
+  );
+  const compatibleRuntimes = useMemo(() => {
+    if (!selectedAgent) return [];
+    return runtimes.filter(
+      (runtime) =>
+        firstCompatibleRuntimeForAgent(selectedAgent, [runtime], {
+          ownerId: currentUserId,
+          onlineOnly: true,
+        }) !== null,
+    );
+  }, [currentUserId, runtimes, selectedAgent]);
+  const [selectedRuntimeId, setSelectedRuntimeId] = useState<string>("");
+  useEffect(() => {
+    if (assigneeType !== "agent") {
+      if (selectedRuntimeId) setSelectedRuntimeId("");
+      return;
+    }
+    if (selectedRuntimeId && compatibleRuntimes.some((r) => r.id === selectedRuntimeId)) {
+      return;
+    }
+    setSelectedRuntimeId(compatibleRuntimes[0]?.id ?? "");
+  }, [assigneeType, compatibleRuntimes, selectedRuntimeId]);
   const resetForNextIssue = () => {
     setTitle("");
     setStatus("todo");
@@ -228,7 +277,12 @@ export function ManualCreatePanel({
   };
 
   const handleSubmit = async () => {
-    if (!title.trim() || submitting) return;
+    if (manualCreateSubmitDisabled({
+      hasTitle: title.trim().length > 0,
+      submitting,
+      assigneeType,
+      selectedRuntimeId,
+    })) return;
     setSubmitting(true);
     try {
       const description = descEditorRef.current?.getMarkdown()?.trim() || undefined;
@@ -242,6 +296,10 @@ export function ManualCreatePanel({
         priority,
         assignee_type: assigneeType,
         assignee_id: assigneeId,
+        runtime_id:
+          assigneeType === "agent" && selectedRuntimeId
+            ? selectedRuntimeId
+            : undefined,
         start_date: startDate || undefined,
         due_date: dueDate || undefined,
         attachment_ids: activeAttachmentIds.length > 0 ? activeAttachmentIds : undefined,
@@ -546,6 +604,7 @@ export function ManualCreatePanel({
               <AssigneePicker
                 assigneeType={assigneeType ?? null}
                 assigneeId={assigneeId ?? null}
+                runtimeChoice={false}
                 onUpdate={(u) => updateAssignee(
                   u.assignee_type ?? undefined,
                   u.assignee_id ?? undefined,
@@ -553,6 +612,20 @@ export function ManualCreatePanel({
                 triggerRender={<PillButton />}
                 align="start"
               />
+
+              {assigneeType === "agent" && compatibleRuntimes.length > 0 && (
+                <select
+                  value={selectedRuntimeId}
+                  onChange={(event) => setSelectedRuntimeId(event.target.value)}
+                  className="h-7 rounded-sm border border-border bg-background px-2 text-xs text-foreground"
+                >
+                  {compatibleRuntimes.map((runtime) => (
+                    <option key={runtime.id} value={runtime.id}>
+                      {runtime.name}
+                    </option>
+                  ))}
+                </select>
+              )}
 
               {/* Due date */}
               <DueDatePicker
@@ -748,7 +821,21 @@ export function ManualCreatePanel({
                     </Tooltip>
                   </TooltipProvider>
                 ) : (
-                  <Button size="sm" onClick={handleSubmit} disabled={submitting}>
+                  <Button
+                    size="sm"
+                    onClick={handleSubmit}
+                    disabled={manualCreateSubmitDisabled({
+                      hasTitle: title.trim().length > 0,
+                      submitting,
+                      assigneeType,
+                      selectedRuntimeId,
+                    })}
+                    title={
+                      assigneeType === "agent" && !selectedRuntimeId
+                        ? t(($) => $.create_issue.agent.runtime_blocked_tooltip)
+                        : undefined
+                    }
+                  >
                     {submitting ? t(($) => $.create_issue.submitting) : t(($) => $.create_issue.submit)}
                   </Button>
                 )}

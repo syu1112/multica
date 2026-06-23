@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import type {
   Agent,
-  AgentRuntime,
   MemberWithUser,
   Skill,
   SkillFile,
@@ -36,7 +35,6 @@ import {
   workspaceKeys,
 } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { runtimeListOptions } from "@multica/core/runtimes";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import {
@@ -186,10 +184,8 @@ function UsedBySection({ agents }: { agents: Agent[] }) {
 
 function OriginSidebarCard({
   origin,
-  runtime,
 }: {
   origin: OriginInfo;
-  runtime: AgentRuntime | null;
 }) {
   const { t } = useT("skills");
   if (origin.type === "manual") return null;
@@ -214,11 +210,6 @@ function OriginSidebarCard({
         )}
         {label}
       </div>
-      {runtime && (
-        <div className="mt-1 break-all text-xs text-foreground">
-          {runtime.name}
-        </div>
-      )}
       {origin.source_path && (
         <div className="mt-1 break-all font-mono text-xs text-foreground">
           {origin.source_path}
@@ -260,9 +251,6 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   );
   const { data: members = [], error: membersError } = useQuery(
     memberListOptions(wsId),
-  );
-  const { data: runtimes = [], error: runtimesError } = useQuery(
-    runtimeListOptions(wsId),
   );
 
   const assignments = useMemo(
@@ -344,11 +332,6 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     () => (skill ? readOrigin(skill) : null),
     [skill],
   );
-  const originRuntime = useMemo<AgentRuntime | null>(() => {
-    if (!origin || origin.type !== "runtime_local" || !origin.runtime_id)
-      return null;
-    return runtimes.find((r) => r.id === origin.runtime_id) ?? null;
-  }, [origin, runtimes]);
 
   const skillAgents = useMemo(
     () => assignments.get(skillId) ?? [],
@@ -485,7 +468,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   };
 
   const supportingQueryDown =
-    !!agentsError || !!membersError || !!runtimesError;
+    !!agentsError || !!membersError;
 
   if (isLoading) {
     return (
@@ -539,11 +522,9 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const originLabel = (() => {
     if (!origin) return null;
     if (origin.type === "runtime_local") {
-      return originRuntime
-        ? t(($) => $.detail.subline.origin_runtime_named, { name: originRuntime.name })
-        : origin.provider
-          ? t(($) => $.detail.subline.origin_runtime_provider, { provider: origin.provider })
-          : t(($) => $.detail.subline.origin_runtime_unknown);
+      return origin.provider
+        ? t(($) => $.detail.subline.origin_runtime_provider, { provider: origin.provider })
+        : t(($) => $.detail.subline.origin_runtime_unknown);
     }
     if (origin.type === "clawhub") return t(($) => $.detail.subline.origin_clawhub);
     if (origin.type === "skills_sh") return t(($) => $.detail.subline.origin_skills_sh);
@@ -862,7 +843,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 {t(($) => $.detail.sidebar.origin)}
               </h3>
-              <OriginSidebarCard origin={origin} runtime={originRuntime} />
+              <OriginSidebarCard origin={origin} />
             </div>
           )}
 

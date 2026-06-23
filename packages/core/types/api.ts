@@ -10,6 +10,8 @@ export interface CreateIssueRequest {
   priority?: IssuePriority;
   assignee_type?: IssueAssigneeType;
   assignee_id?: string;
+  /** Per-run runtime selection for agent assignees. Must be owned by requester. */
+  runtime_id?: string;
   parent_issue_id?: string;
   project_id?: string;
   start_date?: string;
@@ -24,6 +26,8 @@ export interface UpdateIssueRequest {
   priority?: IssuePriority;
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
+  /** Per-run runtime selection for agent assignees. Must be owned by requester. */
+  runtime_id?: string | null;
   position?: number;
   start_date?: string | null;
   due_date?: string | null;

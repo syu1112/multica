@@ -133,6 +133,11 @@ import { createRequestId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
 import {
+  AgentListSchema,
+  AgentTaskResponseSchema,
+  AgentTaskListSchema,
+  AgentRuntimeListSchema,
+  AgentSchema,
   AgentTemplateSchema,
   AgentTemplateSummaryListSchema,
   AttachmentResponseSchema,
@@ -147,6 +152,9 @@ import {
   DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
+  EMPTY_AGENT,
+  EMPTY_AGENT_TASK_LIST,
+  EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_AGENT_TEMPLATE_DETAIL,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
@@ -164,6 +172,7 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  ActiveTasksForIssueResponseSchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
   ListAutopilotsResponseSchema,
@@ -178,6 +187,7 @@ import {
   SquadListSchema,
   SquadMemberStatusListResponseSchema,
   SubscribersListSchema,
+  TaskMessagePayloadListSchema,
   TimelineEntriesSchema,
   UserSchema,
   WebhookDeliveryResponseSchema,
@@ -198,6 +208,8 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_ACTIVE_TASKS_FOR_ISSUE_RESPONSE,
+  EMPTY_TASK_MESSAGE_PAYLOAD_LIST,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -573,6 +585,7 @@ export class ApiClient {
   async quickCreateIssue(data: {
     agent_id?: string;
     squad_id?: string;
+    runtime_id?: string;
     prompt: string;
     project_id?: string | null;
     parent_issue_id?: string | null;
@@ -783,18 +796,27 @@ export class ApiClient {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.include_archived) search.set("include_archived", "true");
-    return this.fetch(`/api/agents?${search}`);
+    const raw = await this.fetch<unknown>(`/api/agents?${search}`);
+    return parseWithFallback(raw, AgentListSchema, [], {
+      endpoint: "GET /api/agents",
+    }) as Agent[];
   }
 
   async getAgent(id: string): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}`);
+    const raw = await this.fetch<unknown>(`/api/agents/${id}`);
+    return parseWithFallback(raw, AgentSchema, { ...EMPTY_AGENT, id }, {
+      endpoint: "GET /api/agents/:id",
+    }) as Agent;
   }
 
   async createAgent(data: CreateAgentRequest): Promise<Agent> {
-    return this.fetch("/api/agents", {
+    const raw = await this.fetch<unknown>("/api/agents", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return parseWithFallback(raw, AgentSchema, EMPTY_AGENT, {
+      endpoint: "POST /api/agents",
+    }) as Agent;
   }
 
   async listAgentTemplates(): Promise<AgentTemplateSummary[]> {
@@ -843,14 +865,22 @@ export class ApiClient {
   }
 
   async updateAgent(id: string, data: UpdateAgentRequest): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}`, {
+    const raw = await this.fetch<unknown>(`/api/agents/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
+    return parseWithFallback(raw, AgentSchema, { ...EMPTY_AGENT, id }, {
+      endpoint: "PUT /api/agents/:id",
+    }) as Agent;
   }
 
   async archiveAgent(id: string): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}/archive`, { method: "POST" });
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/archive`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, AgentSchema, { ...EMPTY_AGENT, id }, {
+      endpoint: "POST /api/agents/:id/archive",
+    }) as Agent;
   }
 
   /**
@@ -879,7 +909,12 @@ export class ApiClient {
   }
 
   async restoreAgent(id: string): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/restore`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, AgentSchema, { ...EMPTY_AGENT, id }, {
+      endpoint: "POST /api/agents/:id/restore",
+    }) as Agent;
   }
 
   // Bulk-cancel every active task (queued/dispatched/running) for the agent.
@@ -890,11 +925,19 @@ export class ApiClient {
     return this.fetch(`/api/agents/${id}/cancel-tasks`, { method: "POST" });
   }
 
+  // Runtime resources are owner-only. Workspace owner/admin roles do not
+  // grant visibility into another member's local runtime.
   async listRuntimes(params?: { workspace_id?: string; owner?: "me" }): Promise<AgentRuntime[]> {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.owner) search.set("owner", params.owner);
-    return this.fetch(`/api/runtimes?${search}`);
+    const raw = await this.fetch<unknown>(`/api/runtimes?${search}`);
+    return parseWithFallback(
+      raw,
+      AgentRuntimeListSchema,
+      EMPTY_AGENT_RUNTIME_LIST,
+      { endpoint: "GET /api/runtimes" },
+    ) as AgentRuntime[];
   }
 
   async listCloudRuntimeNodes(
@@ -1365,7 +1408,10 @@ export class ApiClient {
   }
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {
-    return this.fetch(`/api/agents/${agentId}/tasks`);
+    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/tasks`);
+    return parseWithFallback(raw, AgentTaskListSchema, EMPTY_AGENT_TASK_LIST, {
+      endpoint: "GET /api/agents/:id/tasks",
+    });
   }
 
   // Workspace-scoped agent task snapshot: every active task
@@ -1374,7 +1420,10 @@ export class ApiClient {
   // derivation; one fetch backs every per-agent presence read in the app.
   // Workspace is resolved server-side from the X-Workspace-Slug header.
   async getAgentTaskSnapshot(): Promise<AgentTask[]> {
-    return this.fetch(`/api/agent-task-snapshot`);
+    const raw = await this.fetch<unknown>(`/api/agent-task-snapshot`);
+    return parseWithFallback(raw, AgentTaskListSchema, EMPTY_AGENT_TASK_LIST, {
+      endpoint: "GET /api/agent-task-snapshot",
+    });
   }
 
   // Per-agent daily activity for the last 30 days, anchored on
@@ -1391,15 +1440,30 @@ export class ApiClient {
   }
 
   async getActiveTasksForIssue(issueId: string): Promise<{ tasks: AgentTask[] }> {
-    return this.fetch(`/api/issues/${issueId}/active-task`);
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/active-task`);
+    return parseWithFallback(
+      raw,
+      ActiveTasksForIssueResponseSchema,
+      EMPTY_ACTIVE_TASKS_FOR_ISSUE_RESPONSE,
+      { endpoint: "GET /api/issues/:id/active-task" },
+    );
   }
 
   async listTaskMessages(taskId: string): Promise<TaskMessagePayload[]> {
-    return this.fetch(`/api/tasks/${taskId}/messages`);
+    const raw = await this.fetch<unknown>(`/api/tasks/${taskId}/messages`);
+    return parseWithFallback(
+      raw,
+      TaskMessagePayloadListSchema,
+      EMPTY_TASK_MESSAGE_PAYLOAD_LIST,
+      { endpoint: "GET /api/tasks/:id/messages" },
+    );
   }
 
   async listTasksByIssue(issueId: string): Promise<AgentTask[]> {
-    return this.fetch(`/api/issues/${issueId}/task-runs`);
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/task-runs`);
+    return parseWithFallback(raw, AgentTaskListSchema, EMPTY_AGENT_TASK_LIST, {
+      endpoint: "GET /api/issues/:id/task-runs",
+    });
   }
 
   async getIssueUsage(issueId: string): Promise<IssueUsageSummary> {
@@ -1407,16 +1471,44 @@ export class ApiClient {
   }
 
   async cancelTask(issueId: string, taskId: string): Promise<AgentTask> {
-    return this.fetch(`/api/issues/${issueId}/tasks/${taskId}/cancel`, {
-      method: "POST",
-    });
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/tasks/${taskId}/cancel`,
+      {
+        method: "POST",
+      },
+    );
+    return parseWithFallback(
+      raw,
+      AgentTaskResponseSchema,
+      {
+        ...EMPTY_CANCEL_TASK_RESPONSE,
+        id: taskId,
+        issue_id: issueId,
+      },
+      {
+        endpoint: "POST /api/issues/:id/tasks/:taskId/cancel",
+      },
+    );
   }
 
   async rerunIssue(issueId: string, taskId?: string): Promise<AgentTask> {
-    return this.fetch(`/api/issues/${issueId}/rerun`, {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/rerun`, {
       method: "POST",
       body: JSON.stringify(taskId ? { task_id: taskId } : {}),
     });
+    return parseWithFallback(
+      raw,
+      AgentTaskResponseSchema,
+      {
+        ...EMPTY_CANCEL_TASK_RESPONSE,
+        id: taskId ?? "",
+        issue_id: issueId,
+        status: "queued",
+      },
+      {
+        endpoint: "POST /api/issues/:id/rerun",
+      },
+    );
   }
 
   // Inbox

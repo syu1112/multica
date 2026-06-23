@@ -7,14 +7,12 @@ import (
 )
 
 // AgentReadiness reports whether an agent can accept new work right now.
-// "Ready" means archived_at IS NULL, runtime_id IS NOT NULL, and the bound
-// runtime's status is 'online'. When not ready, reason describes which gate
-// failed in language suitable for autopilot_run.failure_reason.
+// "Ready" means archived_at IS NULL and the agent declares a runtime
+// capability. Requester-specific online runtime availability is resolved at
+// enqueue time by RuntimeResolver.
 //
-// err is non-nil only on DB lookup failure for the runtime row. Callers that
-// treat a transient DB error as "do not skip" (the autopilot admission gate)
-// should swallow it; callers that need a hard yes/no (the squad-leader
-// pre-enqueue check in the handler) should fail closed.
+// err is reserved for future checks that need storage access. The current
+// implementation is metadata-only and always returns a nil error.
 //
 // This is the single source of truth shared by:
 //   - service.shouldSkipDispatch (autopilot admission gate)
@@ -26,18 +24,14 @@ import (
 // the bug only surfaces when a user assigns the same squad through two
 // different entry points. Touch this function, all three paths move together.
 func AgentReadiness(ctx context.Context, q *db.Queries, agent db.Agent) (ready bool, reason string, err error) {
+	_ = ctx
+	_ = q
 	if agent.ArchivedAt.Valid {
 		return false, "agent is archived", nil
 	}
-	if !agent.RuntimeID.Valid {
-		return false, "agent has no runtime bound", nil
-	}
-	rt, err := q.GetAgentRuntime(ctx, agent.RuntimeID)
-	if err != nil {
-		return false, "", err
-	}
-	if rt.Status != "online" {
-		return false, "agent runtime is " + rt.Status, nil
+	if !agent.RuntimeProfileID.Valid &&
+		(agent.RuntimeProvider == "" || agent.RuntimeProvider == "legacy_local") {
+		return false, "agent has no runtime capability", nil
 	}
 	return true, "", nil
 }

@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useAuthStore } from "../auth";
 import { agentListOptions } from "../workspace/queries";
 import { runtimeListOptions } from "../runtimes/queries";
 import { agentTaskSnapshotOptions } from "./queries";
 import {
   buildPresenceMap,
   deriveAgentPresenceDetail,
+  runtimeForAgentCapability,
 } from "./derive-presence";
 import type { AgentPresenceDetail } from "./types";
 
@@ -50,6 +52,7 @@ export function useWorkspacePresenceMap(wsId: string | undefined): {
   byAgent: Map<string, AgentPresenceDetail>;
   loading: boolean;
 } {
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { data: agents, isPending: agentsPending, isError: agentsErr } = useQuery({
     ...agentListOptions(wsId ?? ""),
     enabled: !!wsId,
@@ -78,9 +81,19 @@ export function useWorkspacePresenceMap(wsId: string | undefined): {
       runtimes: safeRuntimes,
       snapshot: safeSnapshot,
       now: Date.now(),
+      ownerId: currentUserId,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents, runtimes, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
+  }, [
+    agents,
+    runtimes,
+    snapshot,
+    agentsErr,
+    runtimesErr,
+    snapshotErr,
+    tick,
+    currentUserId,
+  ]);
 
   return {
     byAgent,
@@ -120,6 +133,7 @@ export function useAgentPresenceDetail(
   wsId: string | undefined,
   agentId: string | undefined,
 ): AgentPresenceDetail | "loading" {
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { data: agents, isError: agentsErr } = useQuery({
     ...agentListOptions(wsId ?? ""),
     enabled: !!wsId,
@@ -151,12 +165,26 @@ export function useAgentPresenceDetail(
     // archived assignee on an old issue). Render a gray-offline fallback
     // instead of looping in "loading".
     if (!agent) return MISSING_AGENT_DETAIL;
-    // Missing runtime is a legitimate state (offline) — pass null and let
-    // derive handle it.
-    const runtime = safeRuntimes.find((r) => r.id === agent.runtime_id) ?? null;
+    // Missing compatible runtime is a legitimate state (offline) — pass null
+    // and let derive handle it.
+    const runtimesById = new Map(safeRuntimes.map((runtime) => [runtime.id, runtime]));
+    const runtime = runtimeForAgentCapability(agent, safeRuntimes, runtimesById, {
+      ownerId: currentUserId,
+    });
 
     const tasks = safeSnapshot.filter((t) => t.agent_id === agentId);
     return deriveAgentPresenceDetail({ agent, runtime, tasks, now: Date.now() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsId, agentId, agents, runtimes, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
+  }, [
+    wsId,
+    agentId,
+    agents,
+    runtimes,
+    snapshot,
+    agentsErr,
+    runtimesErr,
+    snapshotErr,
+    tick,
+    currentUserId,
+  ]);
 }

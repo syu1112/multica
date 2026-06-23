@@ -124,17 +124,24 @@ export function AgentDetailInspector({
       <Section label={t(($) => $.inspector.section_properties)}>
         <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
           <RuntimePicker
-            value={agent.runtime_id}
+            value={runtime?.id ?? ""}
             runtimes={runtimes}
             members={members}
             currentUserId={currentUserId}
             canEdit={canEdit}
-            onChange={(id) => update({ runtime_id: id })}
+            onChange={(id) => {
+              const next = runtimes.find((item) => item.id === id);
+              if (!next) return Promise.resolve();
+              return update({
+                runtime_provider: next.provider,
+                runtime_profile_id: next.profile_id ?? null,
+              });
+            }}
           />
         </PropRow>
         <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
           <ModelPicker
-            runtimeId={agent.runtime_id}
+            runtimeId={runtime?.id ?? null}
             runtimeOnline={!!isOnline}
             value={agent.model ?? ""}
             canEdit={canEdit}
@@ -142,7 +149,7 @@ export function AgentDetailInspector({
           />
         </PropRow>
         <ThinkingPropRow
-          runtimeId={agent.runtime_id}
+          runtimeId={runtime?.id ?? null}
           runtimeOnline={!!isOnline}
           model={agent.model ?? ""}
           value={agent.thinking_level ?? ""}

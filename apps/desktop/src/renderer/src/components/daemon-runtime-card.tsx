@@ -12,7 +12,11 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { runtimeListOptions } from "@multica/core/runtimes";
-import { agentTaskSnapshotOptions } from "@multica/core/agents";
+import {
+  agentTaskSnapshotOptions,
+  runtimeForAgentCapability,
+} from "@multica/core/agents";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -41,6 +45,7 @@ export function DaemonRuntimeActions() {
   const wsId = useWorkspaceId();
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
 
   const localRuntimeIds = useMemo(() => {
     if (!status.daemonId) return new Set<string>();
@@ -53,14 +58,26 @@ export function DaemonRuntimeActions() {
 
   const runtimeCount = localRuntimeIds.size;
 
+  const localAgents = useMemo(() => {
+    const daemonRuntimes = runtimes.filter((r) => localRuntimeIds.has(r.id));
+    const runtimesById = new Map(daemonRuntimes.map((r) => [r.id, r] as const));
+    return new Set(
+      agents
+        .filter((agent) =>
+          runtimeForAgentCapability(agent, daemonRuntimes, runtimesById),
+        )
+        .map((agent) => agent.id),
+    );
+  }, [agents, localRuntimeIds, runtimes]);
+
   const affectedTasks = useMemo(
     () =>
       snapshot.filter(
         (t) =>
-          localRuntimeIds.has(t.runtime_id) &&
+          localAgents.has(t.agent_id) &&
           (t.status === "running" || t.status === "dispatched"),
       ),
-    [snapshot, localRuntimeIds],
+    [snapshot, localAgents],
   );
 
   useEffect(() => {

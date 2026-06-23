@@ -297,7 +297,7 @@ func (h *Handler) InitiateListModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "runtime not found")
 		return
 	}
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+	if _, ok := h.requireRuntimeOwner(w, r, rt); !ok {
 		return
 	}
 	if rt.Status != "online" {
@@ -315,6 +315,20 @@ func (h *Handler) InitiateListModels(w http.ResponseWriter, r *http.Request) {
 
 // GetModelListRequest returns the status of a model list request.
 func (h *Handler) GetModelListRequest(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
+	if !ok {
+		return
+	}
+	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return
+	}
+	if _, ok := h.requireRuntimeOwner(w, r, rt); !ok {
+		return
+	}
+
 	requestID := chi.URLParam(r, "requestId")
 
 	req, err := h.ModelListStore.Get(r.Context(), requestID)
@@ -323,6 +337,10 @@ func (h *Handler) GetModelListRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req == nil {
+		writeError(w, http.StatusNotFound, "request not found")
+		return
+	}
+	if req.RuntimeID != runtimeID {
 		writeError(w, http.StatusNotFound, "request not found")
 		return
 	}

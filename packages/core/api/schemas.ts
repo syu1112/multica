@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   Agent,
+  AgentRuntime,
   AgentTemplate,
   AgentTemplateSummary,
   Attachment,
@@ -21,6 +22,7 @@ import type {
   TimelineEntry,
   User,
   WebhookDelivery,
+  TaskMessagePayload,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 
@@ -442,10 +444,85 @@ export const RuntimeUsageByHourListSchema = z.array(RuntimeUsageByHourSchema);
 // a message from cache or restores text into the input.
 // ---------------------------------------------------------------------------
 
-const AgentTaskResponseSchema = z.object({
+const TaskAuditSensitiveKeys = [
+  "connection_credentials",
+  "daemon_operation",
+  "daemon_operation_params",
+  "runtime_call_url",
+  "runtime_connection",
+  "runtime_credentials",
+  "runtime_detail_url",
+  "runtime_details",
+  "runtime_selector_option",
+  "work_dir",
+  "prior_work_dir",
+] as const;
+const TaskAuditInputSensitiveKeySet = new Set<string>([
+  ...TaskAuditSensitiveKeys,
+  "runtime_id",
+].map(normalizeTaskAuditKey));
+
+function normalizeTaskAuditKey(key: string): string {
+  return key.toLowerCase().replace(/[_-]/g, "");
+}
+
+function stripTaskAuditSensitiveFields<T extends Record<string, unknown>>(
+  value: T,
+): T {
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, fieldValue] of Object.entries(value)) {
+    if (key === "runtime_id") {
+      cleaned[key] = fieldValue;
+      continue;
+    }
+    if (TaskAuditInputSensitiveKeySet.has(normalizeTaskAuditKey(key))) {
+      continue;
+    }
+    cleaned[key] = fieldValue;
+  }
+  cleaned.result = sanitizeTaskAuditValue(cleaned.result);
+  return cleaned as T;
+}
+
+export function sanitizeTaskAuditInput(
+  input: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!input) return undefined;
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (TaskAuditInputSensitiveKeySet.has(normalizeTaskAuditKey(key))) {
+      continue;
+    }
+    cleaned[key] = sanitizeTaskAuditValue(value);
+  }
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+}
+
+function sanitizeTaskAuditValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeTaskAuditValue);
+  }
+  if (value && typeof value === "object") {
+    return sanitizeTaskAuditInput(value as Record<string, unknown>);
+  }
+  return value;
+}
+
+export function sanitizeTaskMessagePayload<
+  T extends { input?: Record<string, unknown> },
+>(
+  payload: T,
+): T {
+  return {
+    ...payload,
+    input: sanitizeTaskAuditInput(payload.input),
+  };
+}
+
+const AgentTaskResponseBaseSchema = z.object({
   id: z.string(),
   agent_id: z.string().default(""),
-  runtime_id: z.string().default(""),
+  runtime_id: z.unknown().optional().transform(() => ""),
   issue_id: z.string().default(""),
   status: z.string().default("cancelled"),
   priority: z.number().default(0),
@@ -467,6 +544,20 @@ const AgentTaskResponseSchema = z.object({
   relative_work_dir: z.string().optional(),
 }).loose();
 
+export const AgentTaskResponseSchema = AgentTaskResponseBaseSchema
+  .transform(stripTaskAuditSensitiveFields);
+
+export const AgentTaskListSchema = z.array(AgentTaskResponseSchema);
+export const EMPTY_AGENT_TASK_LIST = [];
+
+export const ActiveTasksForIssueResponseSchema = z.object({
+  tasks: AgentTaskListSchema.default([]),
+}).loose();
+
+export const EMPTY_ACTIVE_TASKS_FOR_ISSUE_RESPONSE = {
+  tasks: [],
+};
+
 const CancelledChatMessageSchema = z.object({
   chat_session_id: z.string(),
   message_id: z.string(),
@@ -477,10 +568,10 @@ const CancelledChatMessageSchema = z.object({
   attachments: z.array(AttachmentSchema).optional(),
 }).loose();
 
-export const CancelTaskResponseSchema = AgentTaskResponseSchema.extend({
+export const CancelTaskResponseSchema = AgentTaskResponseBaseSchema.extend({
   cancelled_chat_message: CancelledChatMessageSchema.nullish()
     .transform((value) => value ?? undefined),
-}).loose();
+}).loose().transform(stripTaskAuditSensitiveFields);
 
 export const EMPTY_CANCEL_TASK_RESPONSE: CancelTaskResponse = {
   id: "",
@@ -557,11 +648,147 @@ export const EMPTY_AGENT_TEMPLATE_DETAIL: AgentTemplate = {
   instructions: "",
 };
 
-// `agent` is a full Agent record — schematising every field would duplicate
-// a 50-field interface and bit-rot fast. We keep it loose and require only
-// `id`, the one field the create-from-template flow consumes (used to
-// navigate to the new agent's detail page). Downstream code already
-// optional-chains the rest.
+const TaskMessagePayloadSchema = z.object({
+  task_id: z.string(),
+  issue_id: z.string().optional(),
+  chat_session_id: z.string().optional(),
+  seq: z.number().default(0),
+  type: z.string().default("text"),
+  tool: z.string().optional(),
+  content: z.string().optional(),
+  input: z.preprocess(
+    (value) =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? sanitizeTaskAuditInput(value as Record<string, unknown>)
+        : undefined,
+    z.record(z.string(), z.unknown()).optional(),
+  ),
+  output: z.string().optional(),
+  created_at: z.string().optional(),
+}).loose().transform((payload) => sanitizeTaskMessagePayload(payload) as TaskMessagePayload);
+
+export const TaskMessagePayloadListSchema = z.array(TaskMessagePayloadSchema);
+export const EMPTY_TASK_MESSAGE_PAYLOAD_LIST: TaskMessagePayload[] = [];
+
+const StringWithDefaultSchema = (fallback = "") =>
+  z.preprocess(
+    (value) => (typeof value === "string" ? value : undefined),
+    z.string().default(fallback),
+  );
+
+const NullableStringSchema = z.preprocess(
+  (value) => (typeof value === "string" ? value : null),
+  z.string().nullable(),
+);
+
+const NumberWithDefaultSchema = (fallback: number) =>
+  z.preprocess(
+    (value) => (typeof value === "number" ? value : undefined),
+    z.number().default(fallback),
+  );
+
+const UnknownRecordSchema = z.preprocess(
+  (value) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? value
+      : {},
+  z.record(z.string(), z.unknown()).default({}),
+);
+
+const StringArraySchema = z.preprocess(
+  (value) => (Array.isArray(value) ? value : []),
+  z.array(z.string()).default([]),
+);
+
+const AgentSkillSummarySchema = z.object({
+  id: StringWithDefaultSchema(),
+  name: StringWithDefaultSchema(),
+  description: StringWithDefaultSchema(),
+}).loose();
+
+export const AgentRuntimeSchema = z.object({
+  id: StringWithDefaultSchema(),
+  workspace_id: StringWithDefaultSchema(),
+  daemon_id: NullableStringSchema,
+  name: StringWithDefaultSchema(),
+  runtime_mode: StringWithDefaultSchema("local"),
+  provider: StringWithDefaultSchema(),
+  launch_header: StringWithDefaultSchema(),
+  status: StringWithDefaultSchema("offline"),
+  device_info: StringWithDefaultSchema(),
+  metadata: UnknownRecordSchema,
+  owner_id: NullableStringSchema,
+  visibility: StringWithDefaultSchema("private"),
+  profile_id: NullableStringSchema.optional().default(null),
+  last_seen_at: NullableStringSchema,
+  created_at: StringWithDefaultSchema(),
+  updated_at: StringWithDefaultSchema(),
+}).loose();
+
+export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
+
+export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
+
+export const AgentSchema = z.object({
+  id: StringWithDefaultSchema(),
+  workspace_id: StringWithDefaultSchema(),
+  runtime_id: z.unknown().optional().transform(() => null),
+  runtime_provider: StringWithDefaultSchema("codex"),
+  runtime_profile_id: NullableStringSchema,
+  name: StringWithDefaultSchema(),
+  description: StringWithDefaultSchema(),
+  instructions: StringWithDefaultSchema(),
+  avatar_url: NullableStringSchema,
+  runtime_mode: StringWithDefaultSchema("local"),
+  runtime_config: UnknownRecordSchema,
+  custom_args: StringArraySchema,
+  has_custom_env: z.boolean().optional(),
+  custom_env_key_count: NumberWithDefaultSchema(0).optional(),
+  mcp_config: z.unknown().optional().nullable(),
+  mcp_config_redacted: z.boolean().optional(),
+  visibility: StringWithDefaultSchema("workspace"),
+  status: StringWithDefaultSchema("idle"),
+  max_concurrent_tasks: NumberWithDefaultSchema(1),
+  model: StringWithDefaultSchema(),
+  thinking_level: StringWithDefaultSchema().optional(),
+  owner_id: NullableStringSchema,
+  skills: z.array(AgentSkillSummarySchema).default([]),
+  created_at: StringWithDefaultSchema(),
+  updated_at: StringWithDefaultSchema(),
+  archived_at: NullableStringSchema,
+  archived_by: NullableStringSchema,
+}).loose();
+
+export const AgentListSchema = z.array(AgentSchema);
+
+export const EMPTY_AGENT: Agent = {
+  id: "",
+  workspace_id: "",
+  runtime_id: null,
+  runtime_provider: "codex",
+  runtime_profile_id: null,
+  name: "",
+  description: "",
+  instructions: "",
+  avatar_url: null,
+  runtime_mode: "local",
+  runtime_config: {},
+  custom_args: [],
+  visibility: "workspace",
+  status: "idle",
+  max_concurrent_tasks: 1,
+  model: "",
+  owner_id: null,
+  skills: [],
+  created_at: "",
+  updated_at: "",
+  archived_at: null,
+  archived_by: null,
+};
+
+// The create-from-template response is consumed only for navigation and skill
+// import toasts. Keep this nested agent minimal so future Agent fields do not
+// make template creation fall back unnecessarily.
 const MinimalAgentSchema = z.object({
   id: z.string(),
 }).loose();

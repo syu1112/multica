@@ -28,11 +28,13 @@ import { useQuery } from "@tanstack/react-query";
 import {
   buildPresenceMap,
   deriveAgentPresenceDetail,
+  runtimeForAgentCapability,
   type AgentPresenceDetail,
 } from "@multica/core/agents";
 import { agentListOptions } from "@/data/queries/agents";
 import { runtimeListOptions } from "@/data/queries/runtimes";
 import { agentTaskSnapshotOptions } from "@/data/queries/agent-task-snapshot";
+import { useAuthStore } from "@/data/auth-store";
 
 const PRESENCE_TICK_MS = 30_000;
 
@@ -93,6 +95,7 @@ export function useWorkspacePresenceMap(wsId: string | null | undefined): {
   byAgent: Map<string, AgentPresenceDetail>;
   loading: boolean;
 } {
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { data: agents, isPending: agentsPending, isError: agentsErr } =
     useQuery({ ...agentListOptions(wsId ?? null), enabled: !!wsId });
   const { data: runtimes, isPending: runtimesPending, isError: runtimesErr } =
@@ -123,9 +126,19 @@ export function useWorkspacePresenceMap(wsId: string | null | undefined): {
       runtimes: safeRuntimes,
       snapshot: safeSnapshot,
       now: Date.now(),
+      ownerId: currentUserId,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick is intentional
-  }, [agents, runtimes, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
+  }, [
+    agents,
+    runtimes,
+    snapshot,
+    agentsErr,
+    runtimesErr,
+    snapshotErr,
+    tick,
+    currentUserId,
+  ]);
 
   return {
     byAgent,
@@ -157,6 +170,7 @@ export function useAgentPresence(
   wsId: string | null | undefined,
   agentId: string | null | undefined,
 ): AgentPresenceDetail | "loading" {
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { data: agents, isError: agentsErr } = useQuery({
     ...agentListOptions(wsId ?? null),
     enabled: !!wsId,
@@ -181,8 +195,12 @@ export function useAgentPresence(
 
     const agent = safeAgents.find((a) => a.id === agentId);
     if (!agent) return MISSING_AGENT_DETAIL;
-    const runtime =
-      safeRuntimes.find((r) => r.id === agent.runtime_id) ?? null;
+    const runtime = runtimeForAgentCapability(
+      agent,
+      safeRuntimes,
+      new Map(safeRuntimes.map((r) => [r.id, r])),
+      { ownerId: currentUserId },
+    );
 
     const tasks = safeSnapshot.filter((t) => t.agent_id === agentId);
     return deriveAgentPresenceDetail({
@@ -192,5 +210,16 @@ export function useAgentPresence(
       now: Date.now(),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick is intentional
-  }, [wsId, agentId, agents, runtimes, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
+  }, [
+    wsId,
+    agentId,
+    agents,
+    runtimes,
+    snapshot,
+    agentsErr,
+    runtimesErr,
+    snapshotErr,
+    tick,
+    currentUserId,
+  ]);
 }

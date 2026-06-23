@@ -103,7 +103,6 @@ function makeRow(runtime: AgentRuntime, canDelete = true): RuntimeRow {
   return {
     runtime,
     ownerMember: null,
-    workload: { agentIds: [], runningCount: 0, queuedCount: 0 },
     canDelete,
   };
 }

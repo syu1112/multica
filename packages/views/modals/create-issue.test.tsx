@@ -29,6 +29,42 @@ const mockToastCustom = vi.hoisted(() => vi.fn());
 const mockToastDismiss = vi.hoisted(() => vi.fn());
 const mockToastError = vi.hoisted(() => vi.fn());
 const mockUploadWithToast = vi.hoisted(() => vi.fn());
+const mockAgentsData = vi.hoisted(() => ({
+  list: [{
+    id: "agent-1",
+    name: "Agent One",
+    archived_at: null,
+    runtime_id: null,
+    runtime_provider: "codex",
+    runtime_profile_id: null,
+  }] as Array<{
+    id: string;
+    name: string;
+    archived_at: string | null;
+    runtime_id: string | null;
+    runtime_provider: string;
+    runtime_profile_id: string | null;
+  }>,
+}));
+const mockRuntimesData = vi.hoisted(() => ({
+  list: [{
+    id: "runtime-1",
+    name: "Runtime One",
+    runtime_mode: "local",
+    provider: "codex",
+    profile_id: null,
+    status: "online",
+    owner_id: "user-1",
+  }] as Array<{
+    id: string;
+    name: string;
+    runtime_mode: string;
+    provider: string;
+    profile_id: string | null;
+    status: string;
+    owner_id: string;
+  }>,
+}));
 
 const mockDraftStore = {
   draft: {
@@ -83,6 +119,25 @@ vi.mock("@multica/core/paths", () => ({
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-test",
+}));
+
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector?: (state: { user: { id: string } }) => unknown) =>
+    (selector ? selector({ user: { id: "user-1" } }) : { user: { id: "user-1" } }),
+}));
+
+vi.mock("@multica/core/workspace/queries", () => ({
+  agentListOptions: () => ({
+    queryKey: ["agents"],
+    queryFn: () => Promise.resolve(mockAgentsData.list),
+  }),
+}));
+
+vi.mock("@multica/core/runtimes/queries", () => ({
+  runtimeListOptions: () => ({
+    queryKey: ["runtimes"],
+    queryFn: () => Promise.resolve(mockRuntimesData.list),
+  }),
 }));
 
 vi.mock("@multica/core/issues/queries", () => ({
@@ -313,7 +368,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { CreateIssueModal, ManualCreatePanel } from "./create-issue";
+import { CreateIssueModal, ManualCreatePanel, manualCreateSubmitDisabled } from "./create-issue";
 
 function renderModal(element: React.ReactElement) {
   const qc = new QueryClient({
@@ -344,6 +399,23 @@ describe("CreateIssueModal", () => {
     mockDraftStore.draft.startDate = null;
     mockDraftStore.draft.dueDate = null;
     mockDraftStore.draft.attachments = [];
+    mockAgentsData.list = [{
+      id: "agent-1",
+      name: "Agent One",
+      archived_at: null,
+      runtime_id: null,
+      runtime_provider: "codex",
+      runtime_profile_id: null,
+    }];
+    mockRuntimesData.list = [{
+      id: "runtime-1",
+      name: "Runtime One",
+      runtime_mode: "local",
+      provider: "codex",
+      profile_id: null,
+      status: "online",
+      owner_id: "user-1",
+    }];
     mockSetDraft.mockImplementation((patch: Partial<typeof mockDraftStore.draft>) => {
       mockDraftStore.draft = { ...mockDraftStore.draft, ...patch };
     });
@@ -822,5 +894,36 @@ describe("CreateIssueModal", () => {
     await user.click(screen.getByRole("button", { name: /Switch to Agent/i }));
 
     expect(mockSetDraft).toHaveBeenCalledWith({ title: "", description: "" });
+  });
+});
+
+describe("manualCreateSubmitDisabled", () => {
+  it("blocks agent-assigned issue creation until a compatible runtime is selected", () => {
+    expect(
+      manualCreateSubmitDisabled({
+        hasTitle: true,
+        submitting: false,
+        assigneeType: "agent",
+        selectedRuntimeId: "",
+      }),
+    ).toBe(true);
+
+    expect(
+      manualCreateSubmitDisabled({
+        hasTitle: true,
+        submitting: false,
+        assigneeType: "agent",
+        selectedRuntimeId: "runtime-1",
+      }),
+    ).toBe(false);
+
+    expect(
+      manualCreateSubmitDisabled({
+        hasTitle: true,
+        submitting: false,
+        assigneeType: "member",
+        selectedRuntimeId: "",
+      }),
+    ).toBe(false);
   });
 });

@@ -40,6 +40,29 @@ const mockProjectsQuery = vi.hoisted(() => ({
 const mockSquadsData = vi.hoisted(
   () => ({ list: [] as Array<{ id: string; name: string; leader_id: string; archived_at: string | null }> }),
 );
+const mockRuntimesData = vi.hoisted(
+  () => ({
+    list: [{
+      id: "runtime-1",
+      name: "Runtime One",
+      runtime_mode: "local",
+      provider: "codex",
+      profile_id: null,
+      status: "online",
+      owner_id: "user-1",
+      metadata: { cli_version: "1.2.3" },
+    }] as Array<{
+      id: string;
+      name: string;
+      runtime_mode: string;
+      provider: string;
+      profile_id: string | null;
+      status: string;
+      owner_id: string;
+      metadata: Record<string, unknown>;
+    }>,
+  }),
+);
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => {
@@ -53,10 +76,19 @@ vi.mock("@tanstack/react-query", () => ({
         return { data: [{ user_id: "user-1", role: "admin" }] };
       case "agents":
         return {
-          data: [{ id: "agent-1", name: "Bohan", archived_at: null, runtime_id: "runtime-1" }],
+          data: [{
+            id: "agent-1",
+            name: "Bohan",
+            archived_at: null,
+            runtime_id: null,
+            runtime_provider: "codex",
+            runtime_profile_id: null,
+          }],
         };
       case "runtimes":
-        return { data: [{ id: "runtime-1", metadata: { cli_version: "1.2.3" } }] };
+        return {
+          data: mockRuntimesData.list,
+        };
       case "projects":
         return mockProjectsQuery;
       default:
@@ -295,6 +327,16 @@ describe("AgentCreatePanel", () => {
     mockProjectsQuery.data = [];
     mockProjectsQuery.isSuccess = true;
     mockSquadsData.list = [];
+    mockRuntimesData.list = [{
+      id: "runtime-1",
+      name: "Runtime One",
+      runtime_mode: "local",
+      provider: "codex",
+      profile_id: null,
+      status: "online",
+      owner_id: "user-1",
+      metadata: { cli_version: "1.2.3" },
+    }];
     mockQuickCreateIssue.mockResolvedValue(undefined);
     mockUploadWithToast.mockResolvedValue({
       id: "019ec09d-6222-722b-bdfa-427b105d80be",
@@ -347,6 +389,7 @@ describe("AgentCreatePanel", () => {
     await waitFor(() => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-1",
+        runtime_id: "runtime-1",
         prompt: "New agent prompt",
         project_id: undefined,
       });
@@ -359,6 +402,82 @@ describe("AgentCreatePanel", () => {
     expect(mockClearPrompt).toHaveBeenCalled();
     expect(mockSetLastMode).toHaveBeenCalledWith("agent");
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("disables submit when the selected agent has no compatible owned online runtime", async () => {
+    const user = userEvent.setup();
+    mockRuntimesData.list = [{
+      id: "runtime-other",
+      name: "Other Runtime",
+      runtime_mode: "local",
+      provider: "codex",
+      profile_id: null,
+      status: "online",
+      owner_id: "user-2",
+      metadata: { cli_version: "1.2.3" },
+    }];
+
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+
+    const editor = screen.getByPlaceholderText(
+      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
+    );
+    await user.clear(editor);
+    await user.type(editor, "New agent prompt");
+
+    const submit = screen.getByRole("button", { name: /^Create \(/i });
+    expect(submit).toBeDisabled();
+    await user.click(submit);
+    expect(mockQuickCreateIssue).not.toHaveBeenCalled();
+  });
+
+  it("lets the user choose among multiple compatible owned runtimes", async () => {
+    const user = userEvent.setup();
+    mockRuntimesData.list = [
+      {
+        id: "runtime-1",
+        name: "Runtime One",
+        runtime_mode: "local",
+        provider: "codex",
+        profile_id: null,
+        status: "online",
+        owner_id: "user-1",
+        metadata: { cli_version: "1.2.3" },
+      },
+      {
+        id: "runtime-2",
+        name: "Runtime Two",
+        runtime_mode: "local",
+        provider: "codex",
+        profile_id: null,
+        status: "online",
+        owner_id: "user-1",
+        metadata: { cli_version: "1.2.3" },
+      },
+    ];
+
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+
+    const runtimeSelect = screen.getByLabelText("Runtime");
+    expect(runtimeSelect).toHaveValue("runtime-1");
+    await user.selectOptions(runtimeSelect, "runtime-2");
+
+    const editor = screen.getByPlaceholderText(
+      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
+    );
+    await user.clear(editor);
+    await user.type(editor, "New agent prompt");
+
+    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
+
+    await waitFor(() => {
+      expect(mockQuickCreateIssue).toHaveBeenCalledWith({
+        agent_id: "agent-1",
+        runtime_id: "runtime-2",
+        prompt: "New agent prompt",
+        project_id: undefined,
+      });
+    });
   });
 
   it("passes referenced upload attachment ids to quick-create", async () => {
@@ -385,6 +504,7 @@ describe("AgentCreatePanel", () => {
     await waitFor(() => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-1",
+        runtime_id: "runtime-1",
         prompt: "Create issue with ![image](/api/attachments/019ec09d-6222-722b-bdfa-427b105d80be/download)",
         project_id: undefined,
         parent_issue_id: undefined,
@@ -421,6 +541,7 @@ describe("AgentCreatePanel", () => {
     await waitFor(() => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         squad_id: "squad-1",
+        runtime_id: "runtime-1",
         prompt: "Investigate the regression",
         project_id: undefined,
       });
@@ -506,6 +627,7 @@ describe("AgentCreatePanel", () => {
     await waitFor(() => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-1",
+        runtime_id: "runtime-1",
         prompt: "Investigate the regression",
         project_id: undefined,
         parent_issue_id: "parent-uuid-1",

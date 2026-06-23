@@ -123,6 +123,11 @@ func (h *Handler) RerunIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	requesterID := parseUUID(userID)
 
 	// Body is optional. A zero-length body or `{}` keeps the legacy
 	// assignee-driven rerun behaviour the CLI relies on.
@@ -143,11 +148,11 @@ func (h *Handler) RerunIssue(w http.ResponseWriter, r *http.Request) {
 		sourceTaskID = parsed
 	}
 
-	task, err := h.TaskService.RerunIssue(r.Context(), issue.ID, sourceTaskID, pgtype.UUID{})
+	task, err := h.TaskService.RerunIssue(r.Context(), issue.ID, requesterID, sourceTaskID, pgtype.UUID{})
 	if err != nil {
 		slog.Warn("issue rerun failed", "issue_id", id, "error", err)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, taskToResponse(*task, uuidToString(issue.WorkspaceID)))
+	writeJSON(w, http.StatusAccepted, taskToAuditResponse(*task, uuidToString(issue.WorkspaceID)))
 }

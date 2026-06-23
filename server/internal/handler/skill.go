@@ -172,7 +172,20 @@ func decodeSkillConfig(raw []byte) any {
 	if config == nil {
 		return map[string]any{}
 	}
+	redactRuntimeLocalOrigin(config)
 	return config
+}
+
+func redactRuntimeLocalOrigin(config any) {
+	obj, ok := config.(map[string]any)
+	if !ok {
+		return
+	}
+	origin, ok := obj["origin"].(map[string]any)
+	if !ok || origin["type"] != "runtime_local" {
+		return
+	}
+	delete(origin, "runtime_id")
 }
 
 func skillSummaryToResponse(

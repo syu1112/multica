@@ -39,6 +39,70 @@ import type {
 } from "@multica/core/types";
 import { IssueSchema } from "@multica/core/api/schemas";
 
+const TaskAuditSensitiveKeys = [
+  "connection_credentials",
+  "daemon_operation",
+  "daemon_operation_params",
+  "runtime_call_url",
+  "runtime_connection",
+  "runtime_credentials",
+  "runtime_detail_url",
+  "runtime_details",
+  "runtime_selector_option",
+  "work_dir",
+  "prior_work_dir",
+] as const;
+const TaskAuditInputSensitiveKeySet = new Set<string>([
+  ...TaskAuditSensitiveKeys,
+  "runtime_id",
+].map(normalizeTaskAuditKey));
+
+function normalizeTaskAuditKey(key: string): string {
+  return key.toLowerCase().replace(/[_-]/g, "");
+}
+
+function sanitizeTaskAuditInput(
+  input: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!input) return undefined;
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (TaskAuditInputSensitiveKeySet.has(normalizeTaskAuditKey(key))) {
+      continue;
+    }
+    cleaned[key] = sanitizeTaskAuditValue(value);
+  }
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+}
+
+function sanitizeTaskAuditValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeTaskAuditValue);
+  }
+  if (value && typeof value === "object") {
+    return sanitizeTaskAuditInput(value as Record<string, unknown>);
+  }
+  return value;
+}
+
+function stripTaskAuditSensitiveFields<T extends Record<string, unknown>>(
+  value: T,
+): T {
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, fieldValue] of Object.entries(value)) {
+    if (key === "runtime_id") {
+      cleaned[key] = fieldValue;
+      continue;
+    }
+    if (TaskAuditInputSensitiveKeySet.has(normalizeTaskAuditKey(key))) {
+      continue;
+    }
+    cleaned[key] = fieldValue;
+  }
+  cleaned.result = sanitizeTaskAuditValue(cleaned.result);
+  return cleaned as T;
+}
+
 /** Upload response. Only fields mobile actually consumes — `url` to put
  *  into the markdown link, `filename` for the `[📎 name](url)` form, `id`
  *  for future linking. `.loose()` so the server can add fields without
@@ -283,35 +347,53 @@ export const ChatPendingTaskSchema: z.ZodType<ChatPendingTask> = z.object({
 
 export const EMPTY_CHAT_PENDING_TASK: ChatPendingTask = {};
 
-export const SendChatMessageResponseSchema: z.ZodType<SendChatMessageResponse> = z.object({
-  message_id: z.string(),
-  task_id: z.string(),
-  created_at: z.string().default(""),
-}).loose();
+export const SendChatMessageResponseSchema: z.ZodType<SendChatMessageResponse> =
+  z.object({
+    message_id: z.string(),
+    task_id: z.string(),
+    created_at: z.string().default(""),
+  }).loose();
 
 // Live timeline emitted by the agent runtime while a task is running. Each
 // row is one execution step (thinking / tool_use / tool_result / text /
 // error). Mirrors web's TaskMessagePayload type and the WS `task:message`
 // payload so the mobile cache shape stays interchangeable with web's.
-export const TaskMessagePayloadSchema: z.ZodType<TaskMessagePayload> = z.object({
-  task_id: z.string(),
-  issue_id: z.string().default(""),
-  chat_session_id: z.string().optional(),
-  seq: z.number().default(0),
-  // Enum drift defense: unknown server-side types fall back to "text" so
-  // the row still renders (as a plain markdown chunk) instead of crashing
-  // the timeline. Matches root CLAUDE.md "Enum drift downgrades, not crashes".
-  type: z
-    .enum(["text", "thinking", "tool_use", "tool_result", "error"])
-    .catch("text"),
-  tool: z.string().optional(),
-  content: z.string().optional(),
-  input: z.record(z.string(), z.unknown()).optional(),
-  output: z.string().optional(),
-  created_at: z.string().optional(),
-}).loose();
+export const TaskMessagePayloadSchema: z.ZodType<TaskMessagePayload> = z
+  .object({
+    task_id: z.string(),
+    issue_id: z.string().default(""),
+    chat_session_id: z.string().optional(),
+    seq: z.number().default(0),
+    // Enum drift defense: unknown server-side types fall back to "text" so
+    // the row still renders (as a plain markdown chunk) instead of crashing
+    // the timeline. Matches root CLAUDE.md "Enum drift downgrades, not crashes".
+    type: z
+      .enum(["text", "thinking", "tool_use", "tool_result", "error"])
+      .catch("text"),
+    tool: z.string().optional(),
+    content: z.string().optional(),
+    input: z.preprocess(
+      (value) =>
+        value && typeof value === "object" && !Array.isArray(value)
+          ? sanitizeTaskAuditInput(value as Record<string, unknown>)
+          : undefined,
+      z.record(z.string(), z.unknown()).optional(),
+    ),
+    output: z.string().optional(),
+    created_at: z.string().optional(),
+  })
+  .loose()
+  .transform(
+    (payload) =>
+      ({
+        ...payload,
+        input: sanitizeTaskAuditInput(payload.input),
+      }) as TaskMessagePayload,
+  );
 
-export const TaskMessageListSchema = z.array(TaskMessagePayloadSchema).default([]);
+export const TaskMessageListSchema = z
+  .array(TaskMessagePayloadSchema)
+  .default([]);
 
 export const EMPTY_TASK_MESSAGE_LIST: TaskMessagePayload[] = [];
 
@@ -367,39 +449,60 @@ export const EMPTY_SEARCH_PROJECTS_RESPONSE: SearchProjectsResponse = {
 // so a future server-side enum value renders a generic fallback rather than
 // crashing the row (root CLAUDE.md "Enum drift downgrades, not crashes").
 
-export const AgentTaskSchema: z.ZodType<AgentTask> = z.object({
-  id: z.string(),
-  agent_id: z.string().default(""),
-  runtime_id: z.string().default(""),
-  issue_id: z.string().default(""),
-  status: z
-    .enum(["queued", "dispatched", "running", "completed", "failed", "cancelled"])
-    .catch("queued"),
-  priority: z.number().default(0),
-  dispatched_at: z.string().nullable().default(null),
-  started_at: z.string().nullable().default(null),
-  completed_at: z.string().nullable().default(null),
-  result: z.unknown().default(null),
-  error: z.string().nullable().default(null),
-  // Backend uses empty string ("") as the "not failed" sentinel (Go
-  // `omitempty` on a custom string-typed enum). Normalize that to `undefined`
-  // so downstream truthy checks (`if (task.failure_reason)`) don't have to
-  // special-case both null/undefined AND "".
-  failure_reason: z
-    .enum(["agent_error", "timeout", "runtime_offline", "runtime_recovery", "manual", ""])
-    .optional()
-    .catch("")
-    .transform((v) => (v === "" ? undefined : v)),
-  created_at: z.string().default(""),
-  chat_session_id: z.string().optional(),
-  autopilot_run_id: z.string().optional(),
-  parent_task_id: z.string().optional(),
-  attempt: z.number().optional(),
-  trigger_comment_id: z.string().optional(),
-  trigger_summary: z.string().optional(),
-  kind: z.enum(["comment", "autopilot", "chat", "quick_create", "direct"]).optional().catch("direct"),
-  work_dir: z.string().optional(),
-}).loose();
+export const AgentTaskSchema: z.ZodType<AgentTask> = z
+  .object({
+    id: z.string(),
+    agent_id: z.string().default(""),
+    runtime_id: z.unknown().optional().transform(() => ""),
+    issue_id: z.string().default(""),
+    status: z
+      .enum([
+        "queued",
+        "dispatched",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+      ])
+      .catch("queued"),
+    priority: z.number().default(0),
+    dispatched_at: z.string().nullable().default(null),
+    started_at: z.string().nullable().default(null),
+    completed_at: z.string().nullable().default(null),
+    result: z.unknown().default(null),
+    error: z.string().nullable().default(null),
+    // Backend uses empty string ("") as the "not failed" sentinel (Go
+    // `omitempty` on a custom string-typed enum). Normalize that to `undefined`
+    // so downstream truthy checks (`if (task.failure_reason)`) don't have to
+    // special-case both null/undefined AND "".
+    failure_reason: z
+      .enum([
+        "agent_error",
+        "timeout",
+        "runtime_offline",
+        "runtime_recovery",
+        "manual",
+        "",
+      ])
+      .optional()
+      .catch("")
+      .transform((v) => (v === "" ? undefined : v)),
+    created_at: z.string().default(""),
+    chat_session_id: z.string().optional(),
+    autopilot_run_id: z.string().optional(),
+    parent_task_id: z.string().optional(),
+    attempt: z.number().optional(),
+    trigger_comment_id: z.string().optional(),
+    trigger_summary: z.string().optional(),
+    kind: z
+      .enum(["comment", "autopilot", "chat", "quick_create", "direct"])
+      .optional()
+      .catch("direct"),
+    work_dir: z.string().optional(),
+    relative_work_dir: z.string().optional(),
+  })
+  .loose()
+  .transform((task) => stripTaskAuditSensitiveFields(task) as AgentTask);
 
 export const AgentTaskListSchema = z.array(AgentTaskSchema).default([]);
 
@@ -553,7 +656,9 @@ export const EMPTY_MEMBER_LIST: MemberWithUser[] = [];
 export const AgentSchema: z.ZodType<Agent> = z.object({
   id: z.string(),
   workspace_id: z.string().default(""),
-  runtime_id: z.string().default(""),
+  runtime_id: z.unknown().optional().transform(() => null),
+  runtime_provider: z.string().default("codex"),
+  runtime_profile_id: z.string().nullable().default(null),
   name: z.string().default(""),
   description: z.string().default(""),
   instructions: z.string().default(""),
@@ -614,6 +719,7 @@ export const RuntimeSchema: z.ZodType<RuntimeDevice> = z.object({
   visibility: z.string().catch("private") as unknown as z.ZodType<
     RuntimeDevice["visibility"]
   >,
+  profile_id: z.string().nullable().default(null),
   timezone: z.string().default(""),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),

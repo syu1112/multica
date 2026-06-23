@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Globe, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
-import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker } from "./avatar-picker";
+import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -17,6 +17,10 @@ import type {
   RuntimeDevice,
   MemberWithUser,
   CreateAgentRequest,
+} from "@multica/core/types";
+import {
+  RUNTIME_PROFILE_PROTOCOL_FAMILIES,
+  type RuntimeProtocolFamily,
 } from "@multica/core/types";
 import { isImeComposing } from "@multica/core/utils";
 import {
@@ -29,6 +33,13 @@ import {
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@multica/ui/components/ui/select";
 import { toast } from "sonner";
 import {
   AGENT_DESCRIPTION_MAX_LENGTH,
@@ -40,8 +51,7 @@ import { useT } from "../../i18n";
 
 export function CreateAgentDialog({
   runtimes,
-  runtimesLoading,
-  members,
+  members: _members,
   currentUserId,
   template,
   squadId,
@@ -49,7 +59,6 @@ export function CreateAgentDialog({
   onCreate,
 }: {
   runtimes: RuntimeDevice[];
-  runtimesLoading?: boolean;
   members: MemberWithUser[];
   currentUserId: string | null;
   // When provided, the dialog opens in "Duplicate" mode: the visible
@@ -77,6 +86,10 @@ export function CreateAgentDialog({
   const isDuplicate = !!template;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
+  const capabilityOptions = useMemo(
+    () => buildRuntimeCapabilityOptions(runtimes, currentUserId, template),
+    [runtimes, currentUserId, template],
+  );
 
   // Name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
@@ -94,29 +107,15 @@ export function CreateAgentDialog({
   );
   const [creating, setCreating] = useState(false);
 
-  // Duplicate-mode pre-fill: clone lands on the source agent's runtime so
-  // the user doesn't have to re-pick. Skipped when that runtime is now
-  // locked for the caller (Create would 403). Empty fallback hands the
-  // job to RuntimePicker — it owns filter state, so it's the only place
-  // that knows which runtimes are visible right now.
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState(() => {
-    const templateRuntime = template?.runtime_id
-      ? runtimes.find((r) => r.id === template.runtime_id)
-      : undefined;
-    if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
-      return templateRuntime.id;
-    }
-    return "";
-  });
+  const [selectedCapabilityKey, setSelectedCapabilityKey] = useState(() =>
+    defaultRuntimeCapabilityKey(template, runtimes, currentUserId),
+  );
 
-  const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
-  // Defense-in-depth: even if a locked runtime somehow ends up selected
-  // (e.g. duplicate of an agent whose template runtime is now locked, and
-  // the workspace has no usable fallback), gate Create on it so we don't
-  // submit a request the backend will reject with 403.
-  const selectedRuntimeLocked =
-    selectedRuntime != null &&
-    !isRuntimeUsableForUser(selectedRuntime, currentUserId);
+  const selectedCapability =
+    capabilityOptions.find((option) => option.key === selectedCapabilityKey) ??
+    capabilityOptions[0] ??
+    builtinRuntimeCapabilityOption("codex");
+  const modelRuntime = selectedCapability.runtimeForModels ?? null;
 
   // Shared squad-join follow-up. Returns nothing — the caller has
   // already shown its create-success toast; we only need to surface a
@@ -149,7 +148,7 @@ export function CreateAgentDialog({
   };
 
   const handleSubmit = async () => {
-    if (!name.trim() || !selectedRuntime || selectedRuntimeLocked) return;
+    if (!name.trim() || !selectedCapability.provider) return;
     setCreating(true);
 
     try {
@@ -157,7 +156,8 @@ export function CreateAgentDialog({
       const data: CreateAgentRequest = {
         name: name.trim(),
         description: description.trim(),
-        runtime_id: selectedRuntime.id,
+        runtime_provider: selectedCapability.provider,
+        runtime_profile_id: selectedCapability.profileId ?? undefined,
         visibility,
         model: model.trim() || undefined,
         instructions: trimmedInstructions || undefined,
@@ -325,21 +325,37 @@ export function CreateAgentDialog({
               </div>
             </div>
 
-            <RuntimePicker
-              runtimes={runtimes}
-              runtimesLoading={runtimesLoading}
-              members={members}
-              currentUserId={currentUserId}
-              selectedRuntimeId={selectedRuntimeId}
-              onSelect={setSelectedRuntimeId}
-            />
+            <div className="flex flex-col min-w-0">
+              <Label className="text-xs text-muted-foreground">
+                {t(($) => $.create_dialog.runtime_label)}
+              </Label>
+              <Select
+                value={selectedCapability.key}
+                onValueChange={(value) => {
+                  if (value) setSelectedCapabilityKey(value);
+                }}
+              >
+                <SelectTrigger className="mt-1.5 w-full">
+                  <SelectValue>
+                    <RuntimeCapabilityLabel option={selectedCapability} />
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start" className="max-h-72">
+                  {capabilityOptions.map((option) => (
+                    <SelectItem key={option.key} value={option.key}>
+                      <RuntimeCapabilityLabel option={option} />
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
             <ModelDropdown
-              runtimeId={selectedRuntime?.id ?? null}
-              runtimeOnline={selectedRuntime?.status === "online"}
+              runtimeId={modelRuntime?.id ?? null}
+              runtimeOnline={modelRuntime?.status === "online"}
               value={model}
               onChange={setModel}
-              disabled={!selectedRuntime}
+              disabled={!modelRuntime}
             />
 
             {/* --- Optional sections (instructions / skills) ---
@@ -375,12 +391,7 @@ export function CreateAgentDialog({
           <Button
             onClick={handleSubmit}
             disabled={
-              creating || !name.trim() || !selectedRuntime || selectedRuntimeLocked
-            }
-            title={
-              selectedRuntimeLocked
-                ? t(($) => $.create_dialog.runtime_private_locked_tooltip)
-                : undefined
+              creating || !name.trim() || !selectedCapability.provider
             }
           >
             {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}
@@ -388,5 +399,103 @@ export function CreateAgentDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+type RuntimeCapabilityOption = {
+  key: string;
+  label: string;
+  provider: string;
+  profileId: string | null;
+  runtimeForModels: RuntimeDevice | null;
+};
+
+function buildRuntimeCapabilityOptions(
+  runtimes: RuntimeDevice[],
+  currentUserId: string | null,
+  template?: Agent | null,
+): RuntimeCapabilityOption[] {
+  const ownLocalRuntimes = runtimes.filter(
+    (runtime) =>
+      runtime.runtime_mode === "local" &&
+      !!currentUserId &&
+      runtime.owner_id === currentUserId,
+  );
+  const options = RUNTIME_PROFILE_PROTOCOL_FAMILIES.map((provider) =>
+    builtinRuntimeCapabilityOption(
+      provider,
+      ownLocalRuntimes.find((runtime) => runtime.provider === provider && !runtime.profile_id) ??
+        null,
+    ),
+  );
+
+  const customByProfile = new Map<string, RuntimeDevice>();
+  for (const runtime of ownLocalRuntimes) {
+    if (runtime.profile_id && !customByProfile.has(runtime.profile_id)) {
+      customByProfile.set(runtime.profile_id, runtime);
+    }
+  }
+  for (const [profileId, runtime] of customByProfile) {
+    options.push({
+      key: `profile:${profileId}`,
+      label: runtime.name,
+      provider: runtime.provider,
+      profileId,
+      runtimeForModels: runtime,
+    });
+  }
+
+  if (
+    template?.runtime_profile_id &&
+    !options.some((option) => option.profileId === template.runtime_profile_id)
+  ) {
+    options.push({
+      key: `profile:${template.runtime_profile_id}`,
+      label: template.runtime_profile_id,
+      provider: template.runtime_provider || "codex",
+      profileId: template.runtime_profile_id,
+      runtimeForModels: null,
+    });
+  }
+
+  return options;
+}
+
+function builtinRuntimeCapabilityOption(
+  provider: RuntimeProtocolFamily | string,
+  runtimeForModels: RuntimeDevice | null = null,
+): RuntimeCapabilityOption {
+  return {
+    key: `provider:${provider}`,
+    label: provider,
+    provider,
+    profileId: null,
+    runtimeForModels,
+  };
+}
+
+function defaultRuntimeCapabilityKey(
+  template: Agent | null | undefined,
+  runtimes: RuntimeDevice[],
+  currentUserId: string | null,
+): string {
+  if (template?.runtime_profile_id) return `profile:${template.runtime_profile_id}`;
+  if (template?.runtime_provider) return `provider:${template.runtime_provider}`;
+  const firstOwnLocal = runtimes.find(
+    (runtime) =>
+      runtime.runtime_mode === "local" &&
+      !!currentUserId &&
+      runtime.owner_id === currentUserId,
+  );
+  if (firstOwnLocal?.profile_id) return `profile:${firstOwnLocal.profile_id}`;
+  return `provider:${firstOwnLocal?.provider ?? "codex"}`;
+}
+
+function RuntimeCapabilityLabel({ option }: { option: RuntimeCapabilityOption }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <ProviderLogo provider={option.provider} className="h-4 w-4 shrink-0" />
+      <span className="truncate">{option.label}</span>
+    </span>
   );
 }

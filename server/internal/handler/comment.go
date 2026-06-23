@@ -1064,7 +1064,7 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	// must keep the resolved root in sync.
 	h.TaskService.AutoUnresolveThreadOnReply(r.Context(), rootComment, uuidToString(issue.WorkspaceID), authorType, authorID)
 
-	h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, suppressAgentIDs)
+	h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, parseUUID(userID), suppressAgentIDs)
 
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -1087,13 +1087,13 @@ func isNoteComment(content string) bool {
 	return strings.EqualFold(firstToken, noteCommentPrefix)
 }
 
-func (h *Handler) triggerTasksForComment(ctx context.Context, issue db.Issue, comment db.Comment, parentComment *db.Comment, actorType, actorID string, suppressAgentIDs []pgtype.UUID) {
+func (h *Handler) triggerTasksForComment(ctx context.Context, issue db.Issue, comment db.Comment, parentComment *db.Comment, actorType, actorID string, requestUserID pgtype.UUID, suppressAgentIDs []pgtype.UUID) {
 	if isNoteComment(comment.Content) {
 		return
 	}
 	triggers := h.computeCommentAgentTriggers(ctx, issue, comment.Content, parentComment, actorType, actorID, commentTriggerComputeOptions{})
 	triggers = filterSuppressedCommentAgentTriggers(triggers, suppressAgentIDs)
-	h.enqueueCommentAgentTriggers(ctx, issue, comment.ID, triggers)
+	h.enqueueCommentAgentTriggers(ctx, issue, comment.ID, triggers, actorType, actorID, requestUserID)
 }
 
 func filterSuppressedCommentAgentTriggers(triggers []commentAgentTrigger, suppressAgentIDs []pgtype.UUID) []commentAgentTrigger {
@@ -1119,12 +1119,16 @@ func filterSuppressedCommentAgentTriggers(triggers []commentAgentTrigger, suppre
 	return filtered
 }
 
-func (h *Handler) enqueueCommentAgentTriggers(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, triggers []commentAgentTrigger) {
+func (h *Handler) enqueueCommentAgentTriggers(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, triggers []commentAgentTrigger, actorType, actorID string, requestUserID pgtype.UUID) {
+	requesterID := requestUserID
+	if actorType == "member" {
+		requesterID = parseUUID(actorID)
+	}
 	for _, trigger := range triggers {
 		switch trigger.Source {
 		case commentTriggerSourceIssueAssignee:
 			if trigger.Squad != nil {
-				if _, err := h.TaskService.EnqueueTaskForSquadLeader(ctx, issue, trigger.Agent.ID, triggerCommentID); err != nil {
+				if _, err := h.TaskService.EnqueueTaskForSquadLeaderByRequester(ctx, issue, trigger.Agent.ID, triggerCommentID, requesterID); err != nil {
 					slog.Warn("enqueue squad leader task failed",
 						"issue_id", uuidToString(issue.ID),
 						"squad_id", uuidToString(trigger.Squad.ID),
@@ -1133,18 +1137,18 @@ func (h *Handler) enqueueCommentAgentTriggers(ctx context.Context, issue db.Issu
 				}
 				continue
 			}
-			if _, err := h.TaskService.EnqueueTaskForIssue(ctx, issue, triggerCommentID); err != nil {
+			if _, err := h.TaskService.EnqueueTaskForIssueByRequester(ctx, issue, requesterID, pgtype.UUID{}, triggerCommentID); err != nil {
 				slog.Warn("enqueue agent task on comment failed", "issue_id", uuidToString(issue.ID), "error", err)
 			}
 		case commentTriggerSourceMentionSquadLeader:
-			if _, err := h.TaskService.EnqueueTaskForSquadLeader(ctx, issue, trigger.Agent.ID, triggerCommentID); err != nil {
+			if _, err := h.TaskService.EnqueueTaskForSquadLeaderByRequester(ctx, issue, trigger.Agent.ID, triggerCommentID, requesterID); err != nil {
 				slog.Warn("enqueue squad leader mention task failed",
 					"issue_id", uuidToString(issue.ID),
 					"agent_id", uuidToString(trigger.Agent.ID),
 					"error", err)
 			}
 		case commentTriggerSourceMentionAgent:
-			if _, err := h.TaskService.EnqueueTaskForMention(ctx, issue, trigger.Agent.ID, triggerCommentID); err != nil {
+			if _, err := h.TaskService.EnqueueTaskForMentionByRequester(ctx, issue, trigger.Agent.ID, triggerCommentID, requesterID); err != nil {
 				slog.Warn("enqueue mention agent task failed",
 					"issue_id", uuidToString(issue.ID),
 					"agent_id", uuidToString(trigger.Agent.ID),
@@ -1214,7 +1218,7 @@ func (h *Handler) computeAssignedSquadLeaderCommentTrigger(ctx context.Context, 
 		ID:          squad.LeaderID,
 		WorkspaceID: issue.WorkspaceID,
 	})
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+	if err != nil || !handlerAgentHasRuntimeCapability(agent) || agent.ArchivedAt.Valid {
 		return commentAgentTrigger{}, false
 	}
 	if !h.canAccessPrivateAgent(ctx, agent, authorType, authorID, uuidToString(issue.WorkspaceID)) {
@@ -1412,12 +1416,12 @@ func (h *Handler) computeMentionedAgentCommentTriggers(ctx context.Context, issu
 				h.lastTaskWasLeader(ctx, issue.ID, leaderID) {
 				continue
 			}
-			// Verify leader agent is ready (has runtime, not archived).
+			// Verify leader agent is ready (has a runtime capability, not archived).
 			agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 				ID:          leaderID,
 				WorkspaceID: issue.WorkspaceID,
 			})
-			if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+			if err != nil || !handlerAgentHasRuntimeCapability(agent) || agent.ArchivedAt.Valid {
 				continue
 			}
 			// Private-agent gate: prevent triggering a private leader via squad mention.
@@ -1446,7 +1450,7 @@ func (h *Handler) computeMentionedAgentCommentTriggers(ctx context.Context, issu
 			ID:          agentUUID,
 			WorkspaceID: issue.WorkspaceID,
 		})
-		if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+		if err != nil || !handlerAgentHasRuntimeCapability(agent) || agent.ArchivedAt.Valid {
 			continue
 		}
 		// Private-agent gate (member→private requires allowed_principals;
@@ -1586,7 +1590,7 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			h.triggerTasksForComment(r.Context(), issue, comment, parentComment, actorType, actorID, suppressAgentIDs)
+			h.triggerTasksForComment(r.Context(), issue, comment, parentComment, actorType, actorID, parseUUID(userID), suppressAgentIDs)
 		}
 	}
 

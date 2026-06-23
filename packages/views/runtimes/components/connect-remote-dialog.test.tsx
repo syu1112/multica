@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { configStore } from "@multica/core/config";
+import { useWSEvent } from "@multica/core/realtime";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
@@ -47,6 +48,7 @@ function renderDialog(config?: {
   daemonAppUrl?: string;
 }) {
   resetConfigStore();
+  vi.mocked(useWSEvent).mockClear();
   if (config) {
     configStore.getState().setDaemonConfig(config);
   }
@@ -114,5 +116,24 @@ describe("ConnectRemoteDialog", () => {
     );
 
     expect(tokenCode).toHaveClass(...ligatureClasses);
+  });
+
+  it("does not require or expose a runtime_id from daemon register events", () => {
+    renderDialog();
+
+    const callback = vi.mocked(useWSEvent).mock.calls.find(
+      ([eventName]) => eventName === "daemon:register",
+    )?.[1];
+    expect(callback).toBeTypeOf("function");
+
+    act(() => {
+      callback?.({ action: "register" });
+    });
+
+    expect(screen.getByText("Computer connected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View runtime" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /create an agent/i }),
+    ).toBeInTheDocument();
   });
 });

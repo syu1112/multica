@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import { deriveAgentAvailability } from "@multica/core/agents";
+import { deriveAgentAvailability, runtimeForAgentCapability } from "@multica/core/agents";
 import type { AgentTask } from "@multica/core/types";
 import { workloadConfig } from "../presence";
 import { useT } from "../../i18n";
@@ -37,6 +38,7 @@ export function AgentActivityHoverContent({
 }: AgentActivityHoverContentProps) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
@@ -66,7 +68,11 @@ export function AgentActivityHoverContent({
       <div className="flex flex-col gap-1.5">
         {tasks.map((task) => {
           const agent = agentById.get(task.agent_id);
-          const runtime = runtimeFrom(agent?.runtime_id, runtimeById);
+          const runtime = agent
+            ? runtimeForAgentCapability(agent, runtimes, runtimeById, {
+                ownerId: currentUserId,
+              })
+            : null;
           const availability = deriveAgentAvailability(runtime, now);
           const isRunning = task.status === "running";
           // queued/dispatched both read as "queued" in the user-facing
@@ -122,14 +128,6 @@ export function AgentActivityHoverContent({
       </div>
     </div>
   );
-}
-
-function runtimeFrom<T extends { id: string }>(
-  id: string | undefined,
-  byId: Map<string, T>,
-): T | null {
-  if (!id) return null;
-  return byId.get(id) ?? null;
 }
 
 // Compact `2m 14s` / `45s` / `1h 03m` duration since the given ISO string.

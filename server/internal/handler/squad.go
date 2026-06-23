@@ -491,7 +491,7 @@ type SquadMemberStatusListResponse struct {
 // out in the SQL.
 func deriveSquadMemberStatus(
 	archived bool,
-	runtimeStatus pgtype.Text,
+	runtimeStatus string,
 	lastSeen pgtype.Timestamptz,
 	hasActiveTask bool,
 	now time.Time,
@@ -502,10 +502,10 @@ func deriveSquadMemberStatus(
 	if hasActiveTask {
 		return "working"
 	}
-	if !runtimeStatus.Valid {
+	if runtimeStatus == "" {
 		return "offline"
 	}
-	if runtimeStatus.String == "online" {
+	if runtimeStatus == "online" {
 		return "idle"
 	}
 	if !lastSeen.Valid {
@@ -527,8 +527,15 @@ func (h *Handler) ListSquadMemberStatus(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
 
-	rows, err := h.Queries.ListSquadMemberStatusRows(r.Context(), squad.ID)
+	rows, err := h.Queries.ListSquadMemberStatusRows(r.Context(), db.ListSquadMemberStatusRowsParams{
+		SquadID:      squad.ID,
+		ViewerUserID: parseUUID(userID),
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list squad member status")
 		return
@@ -544,7 +551,7 @@ func (h *Handler) ListSquadMemberStatus(w http.ResponseWriter, r *http.Request) 
 		response       SquadMemberStatusResponse
 		archived       bool
 		hasActiveTask  bool
-		runtimeStatus  pgtype.Text
+		runtimeStatus  string
 		runtimeSeenAt  pgtype.Timestamptz
 		latestActiveAt pgtype.Timestamptz
 	}
@@ -951,10 +958,10 @@ func (h *Handler) shouldEnqueueSquadLeaderOnAssign(ctx context.Context, issue db
 }
 
 // isSquadLeaderReady returns true when the issue is assigned to a squad whose
-// leader agent can accept work right now. Readiness criteria (archived,
-// runtime bound, runtime online) are shared with the autopilot admission
-// gate via service.AgentReadiness — both paths must move together or one
-// will start enqueueing tasks the other refuses (MUL-2429 RFC §4.b B4).
+// leader agent can accept work right now. Readiness criteria (archived and
+// runtime capability) are shared with the autopilot admission gate via
+// service.AgentReadiness — both paths must move together or one will start
+// enqueueing tasks the other refuses (MUL-2429 RFC §4.b B4).
 func (h *Handler) isSquadLeaderReady(ctx context.Context, issue db.Issue) bool {
 	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "squad" || !issue.AssigneeID.Valid {
 		return false
@@ -983,7 +990,7 @@ func (h *Handler) isSquadLeaderReady(ctx context.Context, issue db.Issue) bool {
 // to a squad. Assign and backlog-promotion paths use this directly; comment
 // paths go through computeCommentAgentTriggers so preview and create share the
 // same trigger set.
-func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string) {
+func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string, selectedRuntimeID pgtype.UUID) {
 	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 		ID:          issue.AssigneeID,
 		WorkspaceID: issue.WorkspaceID,
@@ -1004,7 +1011,11 @@ func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, tr
 		return
 	}
 
-	if _, err := h.TaskService.EnqueueTaskForSquadLeader(ctx, issue, squad.LeaderID, triggerCommentID); err != nil {
+	var requesterID pgtype.UUID
+	if authorType == "member" {
+		requesterID = parseUUID(authorID)
+	}
+	if _, err := h.TaskService.EnqueueTaskForSquadLeaderByRequesterWithRuntime(ctx, issue, squad.LeaderID, triggerCommentID, requesterID, selectedRuntimeID); err != nil {
 		slog.Warn("enqueue squad leader task failed",
 			"issue_id", uuidToString(issue.ID),
 			"squad_id", uuidToString(squad.ID),

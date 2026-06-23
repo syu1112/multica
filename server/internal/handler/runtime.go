@@ -29,10 +29,10 @@ type AgentRuntimeResponse struct {
 	DeviceInfo   string  `json:"device_info"`
 	Metadata     any     `json:"metadata"`
 	OwnerID      *string `json:"owner_id"`
-	// Visibility is "private" (default — only the owner / workspace admins
-	// can bind agents) or "public" (any workspace member can). See migration
-	// 083 and canUseRuntimeForAgent.
-	Visibility string  `json:"visibility"`
+	// Visibility is retained for compatibility, but runtime invocation and
+	// selection are owner-only. Workspace admins may inspect runtime-derived
+	// logs through log endpoints, not list or call another user's runtime.
+	Visibility string `json:"visibility"`
 	// ProfileID is set when this runtime is an instance of a custom
 	// runtime_profile (MUL-3284); null for built-in runtimes.
 	ProfileID  *string `json:"profile_id"`
@@ -102,7 +102,7 @@ func (h *Handler) GetRuntimeUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+	if _, ok := h.requireRuntimeOwner(w, r, rt); !ok {
 		return
 	}
 
@@ -161,7 +161,7 @@ func (h *Handler) GetRuntimeTaskActivity(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+	if _, ok := h.requireRuntimeOwner(w, r, rt); !ok {
 		return
 	}
 
@@ -219,7 +219,7 @@ func (h *Handler) GetRuntimeUsageByAgent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+	if _, ok := h.requireRuntimeOwner(w, r, rt); !ok {
 		return
 	}
 
@@ -286,7 +286,7 @@ func (h *Handler) GetRuntimeUsageByHour(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+	if _, ok := h.requireRuntimeOwner(w, r, rt); !ok {
 		return
 	}
 
@@ -402,9 +402,8 @@ func (h *Handler) resolveViewingTZ(r *http.Request) string {
 // Only fields users may legitimately edit are listed; other runtime metadata
 // (provider, daemon_id, status…) flows in from the daemon and is read-only here.
 type UpdateAgentRuntimeRequest struct {
-	// Visibility flips a runtime between "private" (default — only the owner
-	// or workspace admins can bind agents) and "public" (any workspace
-	// member can). Owner / workspace admin only, gated by canEditRuntime.
+	// Visibility is retained for compatibility. Runtime invocation remains
+	// owner-only regardless of this value.
 	Visibility *string `json:"visibility,omitempty"`
 }
 
@@ -425,12 +424,8 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
+	member, ok := h.requireRuntimeOwner(w, r, rt)
 	if !ok {
-		return
-	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "you can only edit your own runtimes")
 		return
 	}
 
@@ -479,56 +474,54 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 }
 
 func canEditRuntime(member db.Member, rt db.AgentRuntime) bool {
-	if roleAllowed(member.Role, "owner", "admin") {
-		return true
-	}
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 
+func (h *Handler) requireRuntimeOwner(w http.ResponseWriter, r *http.Request, rt db.AgentRuntime) (db.Member, bool) {
+	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
+	if !ok {
+		return db.Member{}, false
+	}
+	if !canEditRuntime(member, rt) {
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return db.Member{}, false
+	}
+	return member, true
+}
+
 // canUseRuntimeForAgent reports whether a workspace member is allowed to
-// bind a new agent to — or move an existing agent onto — the given runtime.
-// Mirrors canEditRuntime but layers on the runtime's visibility flag so a
-// `public` runtime is usable by anyone in the workspace while a `private`
-// runtime stays bound to its owner. Workspace owners/admins keep an
-// administrative override for both. See migration 083 for the visibility
-// column.
+// use the given runtime as an execution resource. Runtime invocation is
+// strictly owner-only; workspace owner/admin roles do not override this.
 func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime) bool {
-	if roleAllowed(member.Role, "owner", "admin") {
-		return true
-	}
-	if rt.Visibility == "public" {
-		return true
-	}
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 
 func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 
-	var runtimes []db.AgentRuntime
-	var err error
-
-	if ownerFilter := r.URL.Query().Get("owner"); ownerFilter == "me" {
-		userID, ok := requireUserID(w, r)
-		if !ok {
-			return
-		}
-		runtimes, err = h.Queries.ListAgentRuntimesByOwner(r.Context(), db.ListAgentRuntimesByOwnerParams{
-			WorkspaceID: parseUUID(workspaceID),
-			OwnerID:     parseUUID(userID),
-		})
-	} else {
-		runtimes, err = h.Queries.ListAgentRuntimes(r.Context(), parseUUID(workspaceID))
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
 	}
+	if _, ok := h.requireWorkspaceMember(w, r, workspaceID, "runtime not found"); !ok {
+		return
+	}
+	runtimes, err := h.Queries.ListAgentRuntimesByOwner(r.Context(), db.ListAgentRuntimesByOwnerParams{
+		WorkspaceID: parseUUID(workspaceID),
+		OwnerID:     parseUUID(userID),
+	})
 
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list runtimes")
 		return
 	}
 
-	resp := make([]AgentRuntimeResponse, len(runtimes))
-	for i, rt := range runtimes {
-		resp[i] = runtimeToResponse(rt)
+	resp := make([]AgentRuntimeResponse, 0, len(runtimes))
+	for _, rt := range runtimes {
+		if rt.RuntimeMode != "local" {
+			continue
+		}
+		resp = append(resp, runtimeToResponse(rt))
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -555,17 +548,11 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wsID := uuidToString(rt.WorkspaceID)
-	member, ok := h.requireWorkspaceMember(w, r, wsID, "runtime not found")
+	member, ok := h.requireRuntimeOwner(w, r, rt)
 	if !ok {
 		return
 	}
-
-	// Permission: owner/admin can delete any runtime; members can only delete their own.
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "you can only delete your own runtimes")
-		return
-	}
+	wsID := uuidToString(rt.WorkspaceID)
 	userID := uuidToString(member.UserID)
 
 	// Check if any active (non-archived) agents are bound to this runtime.
@@ -735,15 +722,11 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	wsID := uuidToString(rt.WorkspaceID)
-	member, ok := h.requireWorkspaceMember(w, r, wsID, "runtime not found")
+	member, ok := h.requireRuntimeOwner(w, r, rt)
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "you can only delete your own runtimes")
-		return
-	}
+	wsID := uuidToString(rt.WorkspaceID)
 	userID := uuidToString(member.UserID)
 
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -758,7 +741,7 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 	// agent.runtime_id requires FOR KEY SHARE on the parent runtime row,
 	// which conflicts with FOR UPDATE — so any concurrent INSERT or
 	// UPDATE that would point a new/moved agent at this runtime now
-	// blocks until our tx finishes. This is the "兜底" lock that keeps
+	// blocks until our tx finishes. This final lock keeps
 	// new actives from appearing between our snapshot and our archive.
 	if _, err := qtx.LockAgentRuntime(r.Context(), rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to lock runtime")

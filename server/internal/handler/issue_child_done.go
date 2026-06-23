@@ -250,7 +250,7 @@ func (h *Handler) dispatchParentAssigneeTrigger(ctx context.Context, parent, chi
 
 	switch parent.AssigneeType.String {
 	case "agent":
-		h.triggerChildDoneAgent(ctx, parent, systemComment.ID)
+		h.triggerChildDoneAgent(ctx, parent, systemComment.ID, actorType, actorID)
 	case "squad":
 		h.triggerChildDoneSquad(ctx, parent, child, systemComment.ID, actorType, actorID)
 	}
@@ -269,12 +269,12 @@ func (h *Handler) dispatchParentAssigneeTrigger(ctx context.Context, parent, chi
 // stranded those parents (MUL-2808). Runaway re-triggering is prevented by
 // the HasPendingTaskForIssueAndAgent dedup below, exactly as the @mention
 // self-trigger path relies on it (see computeMentionedAgentCommentTriggers).
-func (h *Handler) triggerChildDoneAgent(ctx context.Context, parent db.Issue, triggerCommentID pgtype.UUID) {
+func (h *Handler) triggerChildDoneAgent(ctx context.Context, parent db.Issue, triggerCommentID pgtype.UUID, actorType, actorID string) {
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 		ID:          parent.AssigneeID,
 		WorkspaceID: parent.WorkspaceID,
 	})
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+	if err != nil || !handlerAgentHasRuntimeCapability(agent) || agent.ArchivedAt.Valid {
 		return
 	}
 
@@ -286,7 +286,11 @@ func (h *Handler) triggerChildDoneAgent(ctx context.Context, parent db.Issue, tr
 		return
 	}
 
-	if _, err := h.TaskService.EnqueueTaskForMention(ctx, parent, parent.AssigneeID, triggerCommentID); err != nil {
+	var requesterID pgtype.UUID
+	if actorType == "member" {
+		requesterID = parseUUID(actorID)
+	}
+	if _, err := h.TaskService.EnqueueTaskForMentionByRequester(ctx, parent, parent.AssigneeID, triggerCommentID, requesterID); err != nil {
 		slog.Warn("child done: enqueue parent agent task failed",
 			"error", err,
 			"parent_id", uuidToString(parent.ID),
@@ -329,7 +333,7 @@ func (h *Handler) triggerChildDoneSquad(ctx context.Context, parent, child db.Is
 	}
 
 	agent, err := h.Queries.GetAgent(ctx, squad.LeaderID)
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+	if err != nil || !handlerAgentHasRuntimeCapability(agent) || agent.ArchivedAt.Valid {
 		return
 	}
 
@@ -341,7 +345,11 @@ func (h *Handler) triggerChildDoneSquad(ctx context.Context, parent, child db.Is
 		return
 	}
 
-	if _, err := h.TaskService.EnqueueTaskForSquadLeader(ctx, parent, squad.LeaderID, triggerCommentID); err != nil {
+	var requesterID pgtype.UUID
+	if actorType == "member" {
+		requesterID = parseUUID(actorID)
+	}
+	if _, err := h.TaskService.EnqueueTaskForSquadLeaderByRequester(ctx, parent, squad.LeaderID, triggerCommentID, requesterID); err != nil {
 		slog.Warn("child done: enqueue parent squad leader task failed",
 			"error", err,
 			"parent_id", uuidToString(parent.ID),

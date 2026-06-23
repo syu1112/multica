@@ -304,14 +304,14 @@ export function IssueActionsMenuItems({
   );
 }
 
-function pickLatestWorkDir(tasks: AgentTask[] | undefined): string | undefined {
+export function pickLatestWorkDir(tasks: AgentTask[] | undefined): string | undefined {
   if (!tasks?.length) return undefined;
   let latest: AgentTask | undefined;
   for (const task of tasks) {
-    if (!task.work_dir) continue;
+    if (!task.relative_work_dir) continue;
     if (!latest || task.created_at > latest.created_at) {
       latest = task;
     }
   }
-  return latest?.work_dir;
+  return latest?.relative_work_dir;
 }

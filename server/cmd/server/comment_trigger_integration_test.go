@@ -56,10 +56,24 @@ func ensureAgentTask(t *testing.T, agentID string) string {
 	}
 	var runtimeID string
 	if err := testPool.QueryRow(ctx,
-		`SELECT runtime_id::text FROM agent WHERE id = $1`,
+		`SELECT ar.id::text
+		   FROM agent a
+		   JOIN agent_runtime ar
+		     ON ar.workspace_id = a.workspace_id
+		    AND ar.owner_id = $2
+		    AND ar.runtime_mode = 'local'
+		    AND ar.status = 'online'
+		    AND (
+		          (a.runtime_profile_id IS NOT NULL AND ar.profile_id = a.runtime_profile_id)
+		       OR (a.runtime_profile_id IS NULL AND ar.profile_id IS NULL AND ar.provider = a.runtime_provider)
+		    )
+		  WHERE a.id = $1
+		  ORDER BY ar.created_at ASC, ar.id ASC
+		  LIMIT 1`,
 		agentID,
+		testUserID,
 	).Scan(&runtimeID); err != nil {
-		t.Fatalf("ensureAgentTask: load runtime_id for agent %s: %v", agentID, err)
+		t.Fatalf("ensureAgentTask: resolve runtime for agent %s: %v", agentID, err)
 	}
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
@@ -128,22 +142,13 @@ func getAgentID(t *testing.T) string {
 }
 
 // createSecondAgent creates a second agent in the test workspace and returns its ID.
-// It reuses the same runtime as the first agent.
+// It declares the same runtime provider capability as the integration fixture.
 func createSecondAgent(t *testing.T) string {
 	t.Helper()
-	// Fetch the first agent to get its runtime_id.
-	resp := authRequest(t, "GET", "/api/agents?workspace_id="+testWorkspaceID, nil)
-	var agents []map[string]any
-	readJSON(t, resp, &agents)
-	if len(agents) == 0 {
-		t.Fatal("no agents in test workspace")
-	}
-	runtimeID := agents[0]["runtime_id"].(string)
-
-	resp = authRequest(t, "POST", "/api/agents?workspace_id="+testWorkspaceID, map[string]any{
-		"name":       "Second Test Agent",
-		"runtime_id": runtimeID,
-		"visibility": "workspace",
+	resp := authRequest(t, "POST", "/api/agents?workspace_id="+testWorkspaceID, map[string]any{
+		"name":             "Second Test Agent",
+		"runtime_provider": "integration_test_runtime",
+		"visibility":       "workspace",
 	})
 	if resp.StatusCode != 201 {
 		body, _ := io.ReadAll(resp.Body)

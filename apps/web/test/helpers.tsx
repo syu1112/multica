@@ -56,6 +56,8 @@ export const mockAgents: Agent[] = [
     id: "agent-1",
     workspace_id: "ws-1",
     runtime_id: "runtime-1",
+    runtime_provider: "claude",
+    runtime_profile_id: null,
     name: "Claude Agent",
     description: "",
     instructions: "",

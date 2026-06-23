@@ -120,8 +120,10 @@ These are all silent no-ops — no error, no run:
   exception: `editing_comment_id` ignores pending tasks from the same comment
   being edited, because save cancels those old tasks before it re-computes
   triggers. It is still comment-scoped, not an agent-wide bypass.
-- **An archived agent**, or a squad whose leader is archived: skipped
-  (`RuntimeID` invalid or `ArchivedAt` set).
+- **An archived agent**, or a squad whose leader is archived or has no runtime
+  capability: skipped before enqueue. If the requester has no compatible
+  online local runtime, enqueue fails through the runtime resolver rather than
+  borrowing another member's runtime.
 - **A private agent you cannot access:** skipped — the mention path gates on
   `canAccessPrivateAgent` directly for both `@agent` and `@squad` (the
   `canEnqueueSquadLeader` wrapper is the assignment/child-done path, not this

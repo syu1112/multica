@@ -121,6 +121,8 @@ type CreateAgentFromTemplateRequest struct {
 	TemplateSlug       string `json:"template_slug"`
 	Name               string `json:"name"`
 	RuntimeID          string `json:"runtime_id"`
+	RuntimeProvider    string `json:"runtime_provider"`
+	RuntimeProfileID   string `json:"runtime_profile_id"`
 	Model              string `json:"model,omitempty"`
 	Visibility         string `json:"visibility,omitempty"`
 	MaxConcurrentTasks int32  `json:"max_concurrent_tasks,omitempty"`
@@ -165,10 +167,6 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if req.RuntimeID == "" {
-		writeError(w, http.StatusBadRequest, "runtime_id is required")
-		return
-	}
 	if req.Visibility == "" {
 		req.Visibility = "private"
 	}
@@ -186,28 +184,51 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, req.RuntimeID, "runtime_id")
-	if !ok {
-		return
+	runtimeMode := "local"
+	runtimeProvider := req.RuntimeProvider
+	var runtimeProfileID pgtype.UUID
+	if req.RuntimeID != "" {
+		runtimeUUID, ok := parseUUIDOrBadRequest(w, req.RuntimeID, "runtime_id")
+		if !ok {
+			return
+		}
+		runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
+			ID:          runtimeUUID,
+			WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "invalid runtime_id")
+			return
+		}
+		member, ok := h.workspaceMember(w, r, workspaceID)
+		if !ok {
+			return
+		}
+		if !canUseRuntimeForAgent(member, runtime) {
+			writeError(w, http.StatusNotFound, "invalid runtime_id")
+			return
+		}
+		runtimeMode = runtime.RuntimeMode
+		runtimeProvider = runtime.Provider
+		runtimeProfileID = runtime.ProfileID
+	} else if req.RuntimeProfileID != "" {
+		profileUUID, ok := parseUUIDOrBadRequest(w, req.RuntimeProfileID, "runtime_profile_id")
+		if !ok {
+			return
+		}
+		profile, err := h.Queries.GetRuntimeProfileForWorkspace(r.Context(), db.GetRuntimeProfileForWorkspaceParams{
+			ID:          profileUUID,
+			WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid runtime_profile_id")
+			return
+		}
+		runtimeProvider = profile.ProtocolFamily
+		runtimeProfileID = profile.ID
 	}
-
-	// Runtime validation reproduces the gating done by CreateAgent
-	// (handler/agent.go) — keep the two paths in sync. Done before fetch so
-	// we don't waste GitHub API calls for a request that's going to 403.
-	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
-		ID:          runtimeUUID,
-		WorkspaceID: wsUUID,
-	})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid runtime_id")
-		return
-	}
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
-		return
-	}
-	if !canUseRuntimeForAgent(member, runtime) {
-		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
+	if runtimeProvider == "" {
+		writeError(w, http.StatusBadRequest, "runtime_provider is required")
 		return
 	}
 
@@ -437,9 +458,11 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		Description:        description,
 		Instructions:       instructions,
 		AvatarUrl:          avatarURL,
-		RuntimeMode:        runtime.RuntimeMode,
+		RuntimeMode:        runtimeMode,
 		RuntimeConfig:      rc,
-		RuntimeID:          runtime.ID,
+		RuntimeID:          pgtype.UUID{},
+		RuntimeProvider:    runtimeProvider,
+		RuntimeProfileID:   runtimeProfileID,
 		Visibility:         req.Visibility,
 		MaxConcurrentTasks: req.MaxConcurrentTasks,
 		OwnerID:            creatorUUID,
@@ -535,11 +558,6 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if runtime.Status == "online" {
-		h.TaskService.ReconcileAgentStatus(r.Context(), agent.ID)
-		agent, _ = h.Queries.GetAgent(r.Context(), agent.ID)
-	}
-
 	resp := agentToResponse(agent)
 	// Templates attach skills via AddAgentSkill above, so the freshly built
 	// AgentResponse must reload them — otherwise the create response (and
@@ -558,8 +576,8 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		ownerID,
 		workspaceID,
 		uuidToString(agent.ID),
-		runtime.Provider,
-		runtime.RuntimeMode,
+		runtimeProvider,
+		runtimeMode,
 		tmpl.Slug, // template slug doubles as the analytics template field
 		isFirstAgent,
 	))

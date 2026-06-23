@@ -538,23 +538,16 @@ func (h *Handler) requireRuntimeLocalSkillAccess(w http.ResponseWriter, r *http.
 		return runtimeIDAndWorkspace{}, false
 	}
 
-	wsID := uuidToString(rt.WorkspaceID)
-	member, ok := h.requireWorkspaceMember(w, r, wsID, "runtime not found")
-	if !ok {
+	if _, ok := h.requireRuntimeOwner(w, r, rt); !ok {
 		return runtimeIDAndWorkspace{}, false
 	}
 
-	if rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID) {
-		return runtimeIDAndWorkspace{
-			runtimeID:   uuidToString(rt.ID),
-			workspaceID: wsID,
-			provider:    rt.Provider,
-			status:      rt.Status,
-		}, true
-	}
-
-	writeError(w, http.StatusForbidden, "insufficient permissions")
-	return runtimeIDAndWorkspace{}, false
+	return runtimeIDAndWorkspace{
+		runtimeID:   uuidToString(rt.ID),
+		workspaceID: uuidToString(rt.WorkspaceID),
+		provider:    rt.Provider,
+		status:      rt.Status,
+	}, true
 }
 
 type runtimeIDAndWorkspace struct {
@@ -818,7 +811,6 @@ func (h *Handler) ReportLocalSkillImportResult(w http.ResponseWriter, r *http.Re
 	config := map[string]any{
 		"origin": map[string]any{
 			"type":        "runtime_local",
-			"runtime_id":  runtimeID,
 			"provider":    body.Skill.Provider,
 			"source_path": body.Skill.SourcePath,
 		},

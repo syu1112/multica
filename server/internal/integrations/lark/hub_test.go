@@ -994,12 +994,12 @@ func waitFor(timeout time.Duration, cond func() bool) bool {
 // invariant: a Reply that exceeds ReplyTimeout MUST get its ctx
 // cancelled instead of running unbounded.
 type slowReplier struct {
-	delay       time.Duration
-	startCh     chan struct{}
-	finishCh    chan struct{}
-	mu          sync.Mutex
-	callCount   int
-	lastCtxErr  error // ctx.Err() observed when Reply returned
+	delay      time.Duration
+	startCh    chan struct{}
+	finishCh   chan struct{}
+	mu         sync.Mutex
+	callCount  int
+	lastCtxErr error // ctx.Err() observed when Reply returned
 }
 
 func newSlowReplier(delay time.Duration) *slowReplier {

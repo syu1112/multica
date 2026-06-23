@@ -274,13 +274,15 @@ func (f *fakeAudit) RecordDrop(ctx context.Context, p AuditDropParams) error {
 type fakeIssueCreator struct {
 	called int
 	params service.IssueCreateParams
+	opts   service.IssueCreateOpts
 	result service.IssueCreateResult
 	err    error
 }
 
-func (f *fakeIssueCreator) Create(ctx context.Context, p service.IssueCreateParams, _ service.IssueCreateOpts) (service.IssueCreateResult, error) {
+func (f *fakeIssueCreator) Create(ctx context.Context, p service.IssueCreateParams, opts service.IssueCreateOpts) (service.IssueCreateResult, error) {
 	f.called++
 	f.params = p
+	f.opts = opts
 	return f.result, f.err
 }
 
@@ -755,6 +757,10 @@ func TestDispatcher_IssueCommandCreatesIssue(t *testing.T) {
 	if !issueSvc.params.AssigneeType.Valid || issueSvc.params.AssigneeType.String != "agent" ||
 		issueSvc.params.AssigneeID != inst.AgentID {
 		t.Fatalf("assignee should default to the installation's agent: %+v", issueSvc.params)
+	}
+	if issueSvc.opts.RequesterID != queries.userBinding.MulticaUserID {
+		t.Fatalf("RequesterID should be the bound Lark sender: got %+v want %+v",
+			issueSvc.opts.RequesterID, queries.userBinding.MulticaUserID)
 	}
 	if !res.IssueID.Valid || res.IssueNumber != 42 {
 		t.Fatalf("issue id/number not propagated: %+v", res)

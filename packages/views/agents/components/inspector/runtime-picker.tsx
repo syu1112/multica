@@ -12,13 +12,10 @@ import { ProviderLogo } from "../../../runtimes/components/provider-logo";
 import { CHIP_CLASS } from "./chip";
 import { useT } from "../../../i18n";
 
-type Filter = "mine" | "all";
-
 /**
- * Inline runtime picker for the agent inspector. Mirrors the runtime selector
- * the previous Settings tab embedded — same Mine/All filter, same provider
- * logos, same online dot — but renders inside the inspector's PropRow so
- * users don't have to leave the page to switch runtime.
+ * Inline runtime capability picker for the agent inspector. It uses the
+ * current user's local runtimes only; picking one persists provider/profile
+ * capability on the agent, not a concrete machine binding.
  */
 export function RuntimePicker({
   value,
@@ -28,7 +25,7 @@ export function RuntimePicker({
   canEdit = true,
   onChange,
 }: {
-  value: string;
+  value: string | null;
   runtimes: AgentRuntime[];
   members: MemberWithUser[];
   currentUserId: string | null;
@@ -38,23 +35,18 @@ export function RuntimePicker({
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState<Filter>("mine");
-
-  const selected = runtimes.find((r) => r.id === value) ?? null;
-  const Icon = selected?.runtime_mode === "cloud" ? Cloud : Monitor;
 
   // Compute filtered list unconditionally — the early `!canEdit` return
   // below would otherwise re-order this hook across renders.
   const isDisabled = (r: AgentRuntime): boolean => {
-    if (!currentUserId) return false;
+    if (!currentUserId) return true;
     if (r.owner_id === currentUserId) return false;
-    return r.visibility !== "public";
+    return true;
   };
   const filtered = useMemo(() => {
-    const list =
-      filter === "mine" && currentUserId
-        ? runtimes.filter((r) => r.owner_id === currentUserId)
-        : runtimes;
+    const list = currentUserId
+      ? runtimes.filter((r) => r.owner_id === currentUserId)
+      : [];
     return list.toSorted((a, b) => {
       const aMine = a.owner_id === currentUserId;
       const bMine = b.owner_id === currentUserId;
@@ -67,7 +59,9 @@ export function RuntimePicker({
       return 0;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runtimes, filter, currentUserId]);
+  }, [runtimes, currentUserId]);
+  const selected = filtered.find((r) => r.id === value) ?? null;
+  const Icon = selected?.runtime_mode === "cloud" ? Cloud : Monitor;
 
   if (!canEdit) {
     const isOnline = selected?.status === "online";
@@ -100,8 +94,6 @@ export function RuntimePicker({
         status: isOnline ? t(($) => $.pickers.runtime_online) : t(($) => $.pickers.runtime_offline),
       })
     : t(($) => $.pickers.runtime_tooltip_none);
-
-  const hasOtherRuntimes = runtimes.some((r) => r.owner_id !== currentUserId);
 
   const getOwner = (id: string | null) =>
     id ? members.find((m) => m.user_id === id) ?? null : null;
@@ -137,26 +129,6 @@ export function RuntimePicker({
             />
           )}
         </>
-      }
-      header={
-        hasOtherRuntimes ? (
-          <div className="p-2">
-            <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-              <FilterButton
-                active={filter === "mine"}
-                onClick={() => setFilter("mine")}
-              >
-                {t(($) => $.scope.mine)}
-              </FilterButton>
-              <FilterButton
-                active={filter === "all"}
-                onClick={() => setFilter("all")}
-              >
-                {t(($) => $.scope.all)}
-              </FilterButton>
-            </div>
-          </div>
-        ) : undefined
       }
     >
       {filtered.length === 0 ? (
@@ -240,29 +212,5 @@ export function RuntimePicker({
         })
       )}
     </PropertyPicker>
-  );
-}
-
-function FilterButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex-1 rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-        active
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      {children}
-    </button>
   );
 }

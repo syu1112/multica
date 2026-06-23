@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Agent, UpdateAgentRequest } from "@multica/core/types";
 import {
+  runtimeForAgentCapability,
   type AgentPresenceDetail,
   useWorkspacePresenceMap,
 } from "@multica/core/agents";
@@ -237,9 +238,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   }
 
   const isArchived = !!agent.archived_at;
-  const runtime = agent.runtime_id
-    ? runtimes.find((r) => r.id === agent.runtime_id) ?? null
-    : null;
+  const runtimesById = new Map(runtimes.map((r) => [r.id, r]));
+  const runtime = runtimeForAgentCapability(agent, runtimes, runtimesById, {
+    ownerId: currentUser?.id ?? null,
+  });
   const owner = agent.owner_id
     ? members.find((m) => m.user_id === agent.owner_id) ?? null
     : null;

@@ -69,6 +69,8 @@ function agent(overrides: Partial<Agent>): Agent {
     archived_at: null,
     archived_by: null,
     ...overrides,
+    runtime_provider: overrides.runtime_provider ?? "claude",
+    runtime_profile_id: overrides.runtime_profile_id ?? null,
   };
 }
 

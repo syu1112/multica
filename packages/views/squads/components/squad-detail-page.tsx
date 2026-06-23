@@ -113,7 +113,7 @@ export function SquadDetailPage() {
   }, [wsMembers, currentUser]);
   const isWorkspaceAdmin = myRole === "owner" || myRole === "admin";
 
-  const { data: runtimes = [], isLoading: runtimesLoading } = useQuery({
+  const { data: runtimes = [] } = useQuery({
     ...runtimeListOptions(wsId),
     enabled: !!wsId && isWorkspaceAdmin,
   });
@@ -290,7 +290,6 @@ export function SquadDetailPage() {
       {showCreateAgent && isWorkspaceAdmin && (
         <CreateAgentDialog
           runtimes={runtimes}
-          runtimesLoading={runtimesLoading}
           members={wsMembers}
           currentUserId={currentUser?.id ?? null}
           squadId={squadId}

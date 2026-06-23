@@ -2,7 +2,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, AgentRuntime } from "@multica/core/types";
-import { useAgentPresenceDetail } from "@multica/core/agents";
+import { runtimeForAgentCapability, useAgentPresenceDetail } from "@multica/core/agents";
+import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   deriveRuntimeHealth,
@@ -28,6 +29,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const p = useWorkspacePaths();
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { data: agents = [], isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
@@ -55,7 +57,10 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const owner = agent.owner_id
     ? members.find((m) => m.user_id === agent.owner_id) ?? null
     : null;
-  const runtime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
+  const runtimesById = new Map(runtimes.map((r) => [r.id, r]));
+  const runtime = runtimeForAgentCapability(agent, runtimes, runtimesById, {
+    ownerId: currentUserId,
+  });
   const isArchived = !!agent.archived_at;
   const initials = agent.name
     .split(" ")

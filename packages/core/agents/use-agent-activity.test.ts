@@ -37,6 +37,8 @@ const fullHistoryAgent: Agent = {
   instructions: "",
   avatar_url: null,
   runtime_mode: "cloud",
+  runtime_provider: "claude",
+  runtime_profile_id: null,
   runtime_config: {},
   custom_args: [],
   visibility: "workspace",

@@ -381,8 +381,19 @@ SELECT
 FROM squad_member sm
 LEFT JOIN agent a
        ON sm.member_type = 'agent' AND a.id = sm.member_id
-LEFT JOIN agent_runtime ar
-       ON ar.id = a.runtime_id
+LEFT JOIN LATERAL (
+    SELECT ar.status, ar.last_seen_at
+    FROM agent_runtime ar
+    WHERE ar.workspace_id = a.workspace_id
+      AND ar.owner_id = $2
+      AND ar.runtime_mode = 'local'
+      AND (
+          (a.runtime_profile_id IS NOT NULL AND ar.profile_id = a.runtime_profile_id)
+          OR (a.runtime_profile_id IS NULL AND ar.profile_id IS NULL AND ar.provider = a.runtime_provider)
+      )
+    ORDER BY (ar.status = 'online') DESC, ar.created_at ASC, ar.id ASC
+    LIMIT 1
+) ar ON true
 LEFT JOIN agent_task_queue atq
        ON sm.member_type = 'agent'
       AND atq.agent_id = sm.member_id
@@ -393,12 +404,17 @@ WHERE sm.squad_id = $1
 ORDER BY sm.created_at ASC, atq.dispatched_at DESC NULLS LAST
 `
 
+type ListSquadMemberStatusRowsParams struct {
+	SquadID      pgtype.UUID `json:"squad_id"`
+	ViewerUserID pgtype.UUID `json:"viewer_user_id"`
+}
+
 type ListSquadMemberStatusRowsRow struct {
 	SquadMemberID     pgtype.UUID        `json:"squad_member_id"`
 	MemberType        string             `json:"member_type"`
 	MemberID          pgtype.UUID        `json:"member_id"`
 	AgentArchivedAt   pgtype.Timestamptz `json:"agent_archived_at"`
-	RuntimeStatus     pgtype.Text        `json:"runtime_status"`
+	RuntimeStatus     string             `json:"runtime_status"`
 	RuntimeLastSeenAt pgtype.Timestamptz `json:"runtime_last_seen_at"`
 	TaskID            pgtype.UUID        `json:"task_id"`
 	TaskStatus        pgtype.Text        `json:"task_status"`
@@ -413,9 +429,11 @@ type ListSquadMemberStatusRowsRow struct {
 // (squad_member × active_task); members with no active task return a
 // single row with NULL task_* columns. Human members and agent members
 // with no agent row also return one row with NULL agent_/runtime_ columns.
-// The handler aggregates rows by member_id.
-func (q *Queries) ListSquadMemberStatusRows(ctx context.Context, squadID pgtype.UUID) ([]ListSquadMemberStatusRowsRow, error) {
-	rows, err := q.db.Query(ctx, listSquadMemberStatusRows, squadID)
+// Runtime health is viewer-scoped: it may only come from the current
+// request user's compatible local runtime, never from another member's
+// legacy agent.runtime_id binding.
+func (q *Queries) ListSquadMemberStatusRows(ctx context.Context, arg ListSquadMemberStatusRowsParams) ([]ListSquadMemberStatusRowsRow, error) {
+	rows, err := q.db.Query(ctx, listSquadMemberStatusRows, arg.SquadID, arg.ViewerUserID)
 	if err != nil {
 		return nil, err
 	}

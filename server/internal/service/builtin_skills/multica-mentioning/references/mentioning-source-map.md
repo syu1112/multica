@@ -80,8 +80,8 @@ a pointer.
 
 | Guard | Source |
 | --- | --- |
-| agent archived / no runtime → `continue` (`RuntimeID` invalid or `ArchivedAt` set) | `server/internal/handler/comment.go:1451-1452` |
-| squad leader archived / no runtime → `continue` | `server/internal/handler/comment.go:1417-1423` |
+| agent archived / no runtime capability → `continue`; requester runtime availability is enforced by the runtime resolver at enqueue | `server/internal/handler/comment.go`, `server/internal/service/task.go` |
+| squad leader archived / no runtime capability → `continue`; requester runtime availability is enforced by the runtime resolver at enqueue | `server/internal/handler/comment.go`, `server/internal/service/task.go` |
 | private agent the actor cannot access → `continue` (`canAccessPrivateAgent`) | `server/internal/handler/comment.go:1454-1458` |
 | private squad leader the actor cannot trigger → `continue` (`canAccessPrivateAgent`) | `server/internal/handler/comment.go:1425-1428` |
 | already-pending dedup (agent) → shared pending-task helper → `continue` | `server/internal/handler/comment.go:1459-1463` |

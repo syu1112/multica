@@ -261,6 +261,7 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 	// route to the resolved leader as the executing agent (Path A from
 	// MUL-2429); agent-assigned autopilots go through the standard issue
 	// path. Both code paths land in agent_task_queue with agent_id = leader.
+	requesterID := autopilotRequesterID(ap)
 	if ap.AssigneeType == "squad" {
 		// Fail-closed private-leader gate: if the leader is private, verify
 		// the autopilot creator still has access. This catches illegitimate
@@ -268,11 +269,11 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 		if leader.Visibility == "private" && !s.canCreatorAccessPrivateLeader(ctx, ap, leader) {
 			return fmt.Errorf("autopilot creator cannot access private squad leader")
 		}
-		if _, err := s.TaskSvc.EnqueueTaskForSquadLeader(ctx, issue, leader.ID, pgtype.UUID{}); err != nil {
+		if _, err := s.TaskSvc.EnqueueTaskForSquadLeaderByRequester(ctx, issue, leader.ID, pgtype.UUID{}, requesterID); err != nil {
 			return fmt.Errorf("enqueue squad leader task: %w", err)
 		}
 	} else {
-		if _, err := s.TaskSvc.EnqueueTaskForIssue(ctx, issue); err != nil {
+		if _, err := s.TaskSvc.EnqueueTaskForIssueByRequester(ctx, issue, requesterID, pgtype.UUID{}); err != nil {
 			return fmt.Errorf("enqueue task for issue: %w", err)
 		}
 	}
@@ -385,11 +386,11 @@ func (e *errDispatchSkipped) Error() string { return e.reason }
 // dispatchRunOnly enqueues a direct agent task without creating an issue.
 //
 // For squad autopilots, the executing agent is the squad leader resolved at
-// trigger time (Path A from MUL-2429). The same archived / runtime-bound /
-// runtime-online gates that the upstream admission check (shouldSkipDispatch)
-// applies also run here as belt-and-braces: if the leader changed between
-// admission and dispatch, or the runtime went offline in the gap, we still
-// fail closed instead of enqueueing a doomed task.
+// trigger time (Path A from MUL-2429). The same archived / runtime-capability
+// / automation-owner runtime gates that the upstream admission check
+// (shouldSkipDispatch) applies also run here as belt-and-braces: if the leader
+// changed between admission and dispatch, or the owner's runtime availability
+// changed in the gap, we still fail closed instead of enqueueing a doomed task.
 func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot, run *db.AutopilotRun) error {
 	agent, _, err := s.resolveAutopilotLeader(ctx, ap)
 	if err != nil {
@@ -408,6 +409,10 @@ func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot,
 	if !ready {
 		return &errDispatchSkipped{reason: formatAdmissionReason(ap, reason)}
 	}
+	runtime, err := s.resolveAutopilotRuntime(ctx, ap, agent)
+	if err != nil {
+		return &errDispatchSkipped{reason: formatAdmissionReason(ap, autopilotRuntimeAdmissionReason(err))}
+	}
 
 	// Fail-closed private-leader gate for squad autopilots.
 	if ap.AssigneeType == "squad" && agent.Visibility == "private" && !s.canCreatorAccessPrivateLeader(ctx, ap, agent) {
@@ -416,7 +421,7 @@ func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot,
 
 	task, err := s.Queries.CreateAutopilotTask(ctx, db.CreateAutopilotTaskParams{
 		AgentID:        agent.ID,
-		RuntimeID:      agent.RuntimeID,
+		RuntimeID:      runtime.ID,
 		Priority:       0,
 		AutopilotRunID: run.ID,
 		// Snapshot the autopilot title so task rows self-describe later
@@ -673,8 +678,8 @@ func (s *AutopilotService) failRun(ctx context.Context, runID pgtype.UUID, reaso
 // shouldSkipDispatch is the pre-flight admission check from MUL-1899.
 // Returns (reason, true) when dispatching now would only enqueue a doomed
 // task — i.e. the assignee (or, for squad autopilots, the squad leader) is
-// gone, archived, has no runtime bound, or its runtime is not currently
-// online. Returns ("", false) on the happy path.
+// gone, archived, lacks a runtime capability, or the automation owner has no
+// compatible online local runtime. Returns ("", false) on the happy path.
 //
 // Errors are split into two classes:
 //   - pgx.ErrNoRows / errSquadArchived (the row truly doesn't exist or is
@@ -725,15 +730,17 @@ func (s *AutopilotService) shouldSkipDispatch(ctx context.Context, ap db.Autopil
 	}
 	ready, reason, err := AgentReadiness(ctx, s.Queries, agent)
 	if err != nil {
-		slog.Warn("autopilot admission: failed to load runtime",
+		slog.Warn("autopilot admission: failed to check agent readiness",
 			"autopilot_id", util.UUIDToString(ap.ID),
-			"runtime_id", util.UUIDToString(agent.RuntimeID),
 			"error", err,
 		)
 		return "", false
 	}
 	if !ready {
 		return formatAdmissionReason(ap, reason), true
+	}
+	if _, err := s.resolveAutopilotRuntime(ctx, ap, agent); err != nil {
+		return formatAdmissionReason(ap, autopilotRuntimeAdmissionReason(err)), true
 	}
 	// Private-agent gate at the autopilot layer. Caller identity = the
 	// autopilot's creator: if the creator no longer has access to the
@@ -780,13 +787,44 @@ func formatAdmissionReason(ap db.Autopilot, raw string) string {
 	switch raw {
 	case "agent is archived":
 		return prefix + "agent is archived"
-	case "agent has no runtime bound":
-		return prefix + "agent has no runtime bound"
+	case "agent has no runtime capability":
+		return prefix + "agent has no runtime capability"
+	case "agent has no compatible runtime for automation owner":
+		return prefix + "agent has no compatible runtime for automation owner"
 	default:
-		// raw is "agent runtime is X" — surface the runtime status while
-		// preserving the legacy "at dispatch time" suffix from MUL-1899
-		// so alert queries do not need to change.
+		// Surface the runtime/readiness status while preserving the legacy
+		// "at dispatch time" suffix from MUL-1899 so alert queries do not
+		// need to change.
 		return raw + " at dispatch time"
+	}
+}
+
+func autopilotRequesterID(ap db.Autopilot) pgtype.UUID {
+	if ap.CreatedByType == "member" && ap.CreatedByID.Valid {
+		return ap.CreatedByID
+	}
+	return pgtype.UUID{}
+}
+
+func (s *AutopilotService) resolveAutopilotRuntime(ctx context.Context, ap db.Autopilot, agent db.Agent) (db.AgentRuntime, error) {
+	if s.TaskSvc == nil {
+		return db.AgentRuntime{}, ErrNoCompatibleRuntimeForUser
+	}
+	return s.TaskSvc.resolveRuntimeForTask(ctx, ap.WorkspaceID, agent, autopilotRequesterID(ap), pgtype.UUID{})
+}
+
+func autopilotRuntimeAdmissionReason(err error) string {
+	switch {
+	case errors.Is(err, ErrRuntimeRequesterRequired):
+		return "agent has no compatible runtime for automation owner"
+	case errors.Is(err, ErrNoCompatibleRuntimeForUser):
+		return "agent has no compatible runtime for automation owner"
+	case errors.Is(err, ErrRuntimeCapabilityMismatch):
+		return "agent has no compatible runtime for automation owner"
+	case errors.Is(err, ErrRuntimeUnavailable):
+		return "agent has no compatible runtime for automation owner"
+	default:
+		return "agent has no compatible runtime for automation owner"
 	}
 }
 

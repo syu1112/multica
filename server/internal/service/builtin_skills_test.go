@@ -93,7 +93,7 @@ func TestBuiltinSkillsFrontmatterIsStrictYAML(t *testing.T) {
 
 	for _, skill := range skills {
 		t.Run(skill.Name, func(t *testing.T) {
-			content := skill.Content
+			content := normalizeSkillContent(skill.Content)
 			if !strings.HasPrefix(content, "---\n") {
 				t.Fatalf("SKILL.md must lead with a --- frontmatter block")
 			}
@@ -335,7 +335,7 @@ func TestCreatingAgentsSkillCoversAgentCreationContracts(t *testing.T) {
 		"not a parameter manual",
 		"`description` is a catalog summary",
 		"`instructions` is the runtime behavior contract",
-		"multica agent create --name <name> --runtime-id <runtime-id>",
+		"multica agent create --name <name> --runtime-provider <provider>",
 		"`model` is a first-class persisted column",
 		"custom_env",
 		"--custom-env-stdin",
@@ -538,6 +538,7 @@ func skillHasFile(skill AgentSkillData, path string) bool {
 // frontmatter block, the body after it, and whether a block was found. It only
 // understands flat `key: value` lines — enough for the template's frontmatter.
 func splitFrontmatter(content string) (map[string]string, string, bool) {
+	content = normalizeSkillContent(content)
 	if !strings.HasPrefix(content, "---\n") {
 		return nil, content, false
 	}
@@ -564,4 +565,8 @@ func splitFrontmatter(content string) (map[string]string, string, bool) {
 		fm[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(val), `"'`)
 	}
 	return fm, body, true
+}
+
+func normalizeSkillContent(content string) string {
+	return strings.ReplaceAll(content, "\r\n", "\n")
 }

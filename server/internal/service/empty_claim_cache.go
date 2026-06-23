@@ -82,7 +82,7 @@ func NewEmptyClaimCache(rdb *redis.Client) *EmptyClaimCache {
 	return &EmptyClaimCache{rdb: rdb}
 }
 
-func emptyClaimKey(runtimeID string) string   { return emptyClaimCachePrefix + runtimeID }
+func emptyClaimKey(runtimeID string) string     { return emptyClaimCachePrefix + runtimeID }
 func emptyClaimVersion(runtimeID string) string { return emptyClaimVersionPrefix + runtimeID }
 
 func (c *EmptyClaimCache) bounded(ctx context.Context) (context.Context, context.CancelFunc) {

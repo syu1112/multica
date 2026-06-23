@@ -32,17 +32,19 @@ import (
 const maxAgentDescriptionLength = 255
 
 type AgentResponse struct {
-	ID            string          `json:"id"`
-	WorkspaceID   string          `json:"workspace_id"`
-	RuntimeID     string          `json:"runtime_id"`
-	Name          string          `json:"name"`
-	Description   string          `json:"description"`
-	Instructions  string          `json:"instructions"`
-	AvatarURL     *string         `json:"avatar_url"`
-	RuntimeMode   string          `json:"runtime_mode"`
-	RuntimeConfig any             `json:"runtime_config"`
-	CustomArgs    []string        `json:"custom_args"`
-	McpConfig     json.RawMessage `json:"mcp_config"`
+	ID               string          `json:"id"`
+	WorkspaceID      string          `json:"workspace_id"`
+	RuntimeID        *string         `json:"runtime_id"`
+	RuntimeProvider  string          `json:"runtime_provider"`
+	RuntimeProfileID *string         `json:"runtime_profile_id"`
+	Name             string          `json:"name"`
+	Description      string          `json:"description"`
+	Instructions     string          `json:"instructions"`
+	AvatarURL        *string         `json:"avatar_url"`
+	RuntimeMode      string          `json:"runtime_mode"`
+	RuntimeConfig    any             `json:"runtime_config"`
+	CustomArgs       []string        `json:"custom_args"`
+	McpConfig        json.RawMessage `json:"mcp_config"`
 	// custom_env is intentionally NOT serialized on agent resources. The
 	// agent_list/get/create/update/archive/restore responses and WS events
 	// only expose coarse metadata (has_custom_env, custom_env_key_count) so
@@ -120,7 +122,9 @@ func agentToResponse(a db.Agent) AgentResponse {
 	return AgentResponse{
 		ID:                 uuidToString(a.ID),
 		WorkspaceID:        uuidToString(a.WorkspaceID),
-		RuntimeID:          uuidToString(a.RuntimeID),
+		RuntimeID:          nil,
+		RuntimeProvider:    a.RuntimeProvider,
+		RuntimeProfileID:   uuidToPtr(a.RuntimeProfileID),
 		Name:               a.Name,
 		Description:        a.Description,
 		Instructions:       a.Instructions,
@@ -254,7 +258,7 @@ type AgentTaskResponse struct {
 	CreatedAt        string                `json:"created_at"`
 	PriorSessionID   string                `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
 	PriorWorkDir     string                `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
-	WorkDir          string                `json:"work_dir,omitempty"`         // local working directory pinned for this task; populated once the daemon reports it
+	WorkDir          string                `json:"work_dir,omitempty"`         // daemon-facing absolute workdir; user audit responses clear it
 	// RelativeWorkDir is a privacy-safe display form of WorkDir intended for
 	// the UI. For standard tasks it strips the daemon's workspaces root so
 	// the user sees `<wsUUID>/<taskShort>/workdir`; for local_directory
@@ -263,8 +267,8 @@ type AgentTaskResponse struct {
 	// `<drive>:/Users/<name>/`) and otherwise fall back to the basename so
 	// the field never carries the user's home dir or account name. Empty
 	// when WorkDir is empty, or when stripping leaves nothing. See
-	// relativeWorkDir() for the full rules. Older clients can still read
-	// WorkDir directly; newer UIs should prefer RelativeWorkDir.
+	// relativeWorkDir() for the full rules. User-facing audit APIs keep this
+	// field and clear WorkDir.
 	RelativeWorkDir          string               `json:"relative_work_dir,omitempty"`
 	TriggerCommentID         *string              `json:"trigger_comment_id,omitempty"`          // comment that triggered this task
 	TriggerThreadID          string               `json:"trigger_thread_id,omitempty"`           // root comment ID for the triggering thread
@@ -405,6 +409,58 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		ChatSessionID:  uuidToString(t.ChatSessionID),
 		AutopilotRunID: uuidToString(t.AutopilotRunID),
 		Kind:           computeTaskKind(t),
+	}
+}
+
+func taskToAuditResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
+	resp := taskToResponse(t, workspaceID)
+	resp.RuntimeID = ""
+	resp.WorkDir = ""
+	resp.Result = sanitizeTaskAuditValue(resp.Result)
+	return resp
+}
+
+var taskAuditSensitiveKeys = map[string]struct{}{
+	"connectioncredentials": {},
+	"daemonoperation":       {},
+	"daemonoperationparams": {},
+	"runtimecallurl":        {},
+	"runtimeconnection":     {},
+	"runtimecredentials":    {},
+	"runtimedetailurl":      {},
+	"runtimedetails":        {},
+	"runtimeid":             {},
+	"runtimeselectoroption": {},
+	"workdir":               {},
+	"priorworkdir":          {},
+}
+
+func normalizeTaskAuditKey(key string) string {
+	key = strings.ToLower(key)
+	key = strings.ReplaceAll(key, "_", "")
+	key = strings.ReplaceAll(key, "-", "")
+	return key
+}
+
+func sanitizeTaskAuditValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any, len(v))
+		for key, nested := range v {
+			if _, sensitive := taskAuditSensitiveKeys[normalizeTaskAuditKey(key)]; sensitive {
+				continue
+			}
+			cleaned[key] = sanitizeTaskAuditValue(nested)
+		}
+		return cleaned
+	case []any:
+		cleaned := make([]any, len(v))
+		for i, nested := range v {
+			cleaned[i] = sanitizeTaskAuditValue(nested)
+		}
+		return cleaned
+	default:
+		return value
 	}
 }
 
@@ -661,6 +717,8 @@ type CreateAgentRequest struct {
 	Instructions       string            `json:"instructions"`
 	AvatarURL          *string           `json:"avatar_url"`
 	RuntimeID          string            `json:"runtime_id"`
+	RuntimeProvider    string            `json:"runtime_provider"`
+	RuntimeProfileID   string            `json:"runtime_profile_id"`
 	RuntimeConfig      any               `json:"runtime_config"`
 	CustomEnv          map[string]string `json:"custom_env"`
 	CustomArgs         []string          `json:"custom_args"`
@@ -721,10 +779,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("description must be %d characters or fewer", maxAgentDescriptionLength))
 		return
 	}
-	if req.RuntimeID == "" {
-		writeError(w, http.StatusBadRequest, "runtime_id is required")
-		return
-	}
 	if req.Visibility == "" {
 		req.Visibility = "private"
 	}
@@ -732,30 +786,56 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		req.MaxConcurrentTasks = 6
 	}
 
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, req.RuntimeID, "runtime_id")
-	if !ok {
-		return
-	}
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
 		return
 	}
 
-	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
-		ID:          runtimeUUID,
-		WorkspaceID: wsUUID,
-	})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid runtime_id")
-		return
+	runtimeMode := "local"
+	runtimeProvider := strings.TrimSpace(req.RuntimeProvider)
+	var runtimeProfileID pgtype.UUID
+	if req.RuntimeID != "" {
+		runtimeUUID, ok := parseUUIDOrBadRequest(w, req.RuntimeID, "runtime_id")
+		if !ok {
+			return
+		}
+		runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
+			ID:          runtimeUUID,
+			WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "invalid runtime_id")
+			return
+		}
+		member, ok := h.workspaceMember(w, r, workspaceID)
+		if !ok {
+			return
+		}
+		if !canUseRuntimeForAgent(member, runtime) {
+			writeError(w, http.StatusNotFound, "invalid runtime_id")
+			return
+		}
+		runtimeMode = runtime.RuntimeMode
+		runtimeProvider = runtime.Provider
+		runtimeProfileID = runtime.ProfileID
+	} else if req.RuntimeProfileID != "" {
+		profileUUID, ok := parseUUIDOrBadRequest(w, req.RuntimeProfileID, "runtime_profile_id")
+		if !ok {
+			return
+		}
+		profile, err := h.Queries.GetRuntimeProfileForWorkspace(r.Context(), db.GetRuntimeProfileForWorkspaceParams{
+			ID:          profileUUID,
+			WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid runtime_profile_id")
+			return
+		}
+		runtimeProvider = profile.ProtocolFamily
+		runtimeProfileID = profile.ID
 	}
-
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
-		return
-	}
-	if !canUseRuntimeForAgent(member, runtime) {
-		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
+	if runtimeProvider == "" && !runtimeProfileID.Valid {
+		writeError(w, http.StatusBadRequest, "runtime_provider or runtime_profile_id is required")
 		return
 	}
 
@@ -763,8 +843,8 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	// are enforced by the daemon at execution time (MUL-2339, Trump's
 	// review note — keep API behaviour consistent: literal-invalid →
 	// always 400; combination-invalid → daemon-side task error).
-	if !agent.IsKnownThinkingValue(runtime.Provider, req.ThinkingLevel) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("thinking_level %q is not a recognised value for runtime %q", req.ThinkingLevel, runtime.Provider))
+	if !agent.IsKnownThinkingValue(runtimeProvider, req.ThinkingLevel) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("thinking_level %q is not a recognised value for runtime %q", req.ThinkingLevel, runtimeProvider))
 		return
 	}
 
@@ -808,9 +888,11 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		Description:        req.Description,
 		Instructions:       req.Instructions,
 		AvatarUrl:          ptrToText(req.AvatarURL),
-		RuntimeMode:        runtime.RuntimeMode,
+		RuntimeMode:        runtimeMode,
 		RuntimeConfig:      rc,
-		RuntimeID:          runtime.ID,
+		RuntimeID:          pgtype.UUID{},
+		RuntimeProvider:    runtimeProvider,
+		RuntimeProfileID:   runtimeProfileID,
 		Visibility:         req.Visibility,
 		MaxConcurrentTasks: req.MaxConcurrentTasks,
 		OwnerID:            parseUUID(ownerID),
@@ -834,11 +916,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
 
-	if runtime.Status == "online" {
-		h.TaskService.ReconcileAgentStatus(r.Context(), created.ID)
-		created, _ = h.Queries.GetAgent(r.Context(), created.ID)
-	}
-
 	resp := agentToResponse(created)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publish(protocol.EventAgentCreated, workspaceID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
@@ -847,8 +924,8 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		ownerID,
 		workspaceID,
 		uuidToString(created.ID),
-		runtime.Provider,
-		runtime.RuntimeMode,
+		runtimeProvider,
+		runtimeMode,
 		req.Template,
 		isFirstAgent,
 	))
@@ -858,12 +935,14 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateAgentRequest struct {
-	Name          *string `json:"name"`
-	Description   *string `json:"description"`
-	Instructions  *string `json:"instructions"`
-	AvatarURL     *string `json:"avatar_url"`
-	RuntimeID     *string `json:"runtime_id"`
-	RuntimeConfig any     `json:"runtime_config"`
+	Name             *string `json:"name"`
+	Description      *string `json:"description"`
+	Instructions     *string `json:"instructions"`
+	AvatarURL        *string `json:"avatar_url"`
+	RuntimeID        *string `json:"runtime_id"`
+	RuntimeProvider  *string `json:"runtime_provider"`
+	RuntimeProfileID *string `json:"runtime_profile_id"`
+	RuntimeConfig    any     `json:"runtime_config"`
 	// custom_env is intentionally NOT updatable through this endpoint.
 	// Use `PUT /api/agents/{id}/env` for env changes — that path is
 	// owner/admin-only, denies agent actors, and writes a persisted
@@ -1058,8 +1137,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	// thinking_level validation hits the right provider enum. When the
 	// request doesn't move the agent, we still need to load the *current*
 	// runtime to validate a thinking_level change. Resolve once and reuse.
+	// targetRuntimeID is legacy-only: new agents should have RuntimeProvider,
+	// but old rows may need their retained runtime_id to derive a provider.
 	targetRuntimeID := existing.RuntimeID
-	targetProvider := ""
+	targetProvider := existing.RuntimeProvider
 	if req.RuntimeID != nil {
 		runtimeUUID, ok := parseUUIDOrBadRequest(w, *req.RuntimeID, "runtime_id")
 		if !ok {
@@ -1070,7 +1151,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			WorkspaceID: existing.WorkspaceID,
 		})
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid runtime_id")
+			writeError(w, http.StatusNotFound, "invalid runtime_id")
 			return
 		}
 		// Same gate as CreateAgent — prevents UpdateAgent from being used to
@@ -1081,13 +1162,43 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !canUseRuntimeForAgent(member, runtime) {
-			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
+			writeError(w, http.StatusNotFound, "invalid runtime_id")
 			return
 		}
-		params.RuntimeID = runtime.ID
 		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
+		params.RuntimeProvider = pgtype.Text{String: runtime.Provider, Valid: true}
+		params.RuntimeProfileID = runtime.ProfileID
 		targetRuntimeID = runtime.ID
 		targetProvider = runtime.Provider
+	} else if req.RuntimeProfileID != nil {
+		if *req.RuntimeProfileID == "" {
+			writeError(w, http.StatusBadRequest, "runtime_profile_id cannot be empty")
+			return
+		}
+		profileUUID, ok := parseUUIDOrBadRequest(w, *req.RuntimeProfileID, "runtime_profile_id")
+		if !ok {
+			return
+		}
+		profile, err := h.Queries.GetRuntimeProfileForWorkspace(r.Context(), db.GetRuntimeProfileForWorkspaceParams{
+			ID:          profileUUID,
+			WorkspaceID: existing.WorkspaceID,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid runtime_profile_id")
+			return
+		}
+		params.RuntimeMode = pgtype.Text{String: "local", Valid: true}
+		params.RuntimeProvider = pgtype.Text{String: profile.ProtocolFamily, Valid: true}
+		params.RuntimeProfileID = profile.ID
+		targetProvider = profile.ProtocolFamily
+	} else if req.RuntimeProvider != nil {
+		if *req.RuntimeProvider == "" {
+			writeError(w, http.StatusBadRequest, "runtime_provider cannot be empty")
+			return
+		}
+		params.RuntimeMode = pgtype.Text{String: "local", Valid: true}
+		params.RuntimeProvider = pgtype.Text{String: *req.RuntimeProvider, Valid: true}
+		targetProvider = *req.RuntimeProvider
 	}
 	if req.Visibility != nil {
 		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
@@ -1098,9 +1209,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if req.MaxConcurrentTasks != nil {
 		params.MaxConcurrentTasks = pgtype.Int4{Int32: *req.MaxConcurrentTasks, Valid: true}
 	}
+	runtimeCapabilityChanged := req.RuntimeID != nil || req.RuntimeProvider != nil || req.RuntimeProfileID != nil
 	if req.Model != nil {
 		params.Model = pgtype.Text{String: *req.Model, Valid: true}
-	} else if req.RuntimeID != nil && existing.Model.Valid && agent.ModelKnownIncompatibleWithProvider(targetProvider, existing.Model.String) {
+	} else if runtimeCapabilityChanged && existing.Model.Valid && agent.ModelKnownIncompatibleWithProvider(targetProvider, existing.Model.String) {
 		// Model is runtime-native. When moving an agent across known provider
 		// families and the caller did not choose a replacement model, clear the
 		// old value so the new runtime falls back to its own default instead of
@@ -1145,7 +1257,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			params.ThinkingLevel = pgtype.Text{String: value, Valid: true}
 		}
-	} else if req.RuntimeID != nil && existing.ThinkingLevel.Valid && existing.ThinkingLevel.String != "" {
+	} else if runtimeCapabilityChanged && existing.ThinkingLevel.Valid && existing.ThinkingLevel.String != "" {
 		// Runtime is changing but the caller didn't touch thinking_level.
 		// If the existing value is not in the new provider's enum at all,
 		// preserving it would smuggle a literal-invalid token to the daemon.
@@ -1241,10 +1353,9 @@ func (h *Handler) attachAgentSkills(ctx context.Context, resp *AgentResponse, ag
 	return nil
 }
 
-// resolveAgentProvider returns the provider name for the runtime that
-// will own this agent after the in-flight update applies. Used by the
-// thinking_level validator so a runtime/model swap and a level swap
-// validated in the same request both consult the same provider.
+// resolveAgentProvider returns the provider name for a legacy runtime_id when
+// compatibility requests need to translate that ID into a provider capability.
+// It does not make that runtime the agent's execution location.
 func (h *Handler) resolveAgentProvider(r *http.Request, workspaceID pgtype.UUID, runtimeID pgtype.UUID) (string, bool) {
 	rt, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
 		ID:          runtimeID,
@@ -1402,7 +1513,7 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]AgentTaskResponse, len(tasks))
 	for i, t := range tasks {
-		resp[i] = taskToResponse(t, workspaceID)
+		resp[i] = taskToAuditResponse(t, workspaceID)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -1539,7 +1650,7 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		if _, ok := allowed[uuidToString(t.AgentID)]; !ok {
 			continue
 		}
-		resp = append(resp, taskToResponse(t, workspaceID))
+		resp = append(resp, taskToAuditResponse(t, workspaceID))
 	}
 
 	writeJSON(w, http.StatusOK, resp)

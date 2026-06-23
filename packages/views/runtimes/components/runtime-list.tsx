@@ -18,11 +18,7 @@ import type {
 } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
-import {
-  agentListOptions,
-  memberListOptions,
-} from "@multica/core/workspace/queries";
-import { agentTaskSnapshotOptions } from "@multica/core/agents";
+import { memberListOptions } from "@multica/core/workspace/queries";
 import {
   deriveRuntimeHealth,
   runtimeUsageOptions,
@@ -75,22 +71,19 @@ import { useT } from "../../i18n";
 // operation) is deliberately not offered.
 const GRID_COLS =
   "grid-cols-[0.75rem_minmax(120px,1fr)_var(--rtc-health)_var(--rtc-kebab)_0.75rem] " +
-  "@2xl:grid-cols-[0.75rem_minmax(140px,1fr)_var(--rtc-health)_var(--rtc-owner)_var(--rtc-agents)_var(--rtc-cost)_var(--rtc-cli)_var(--rtc-kebab)_0.75rem]";
+  "@2xl:grid-cols-[0.75rem_minmax(140px,1fr)_var(--rtc-health)_var(--rtc-owner)_var(--rtc-cost)_var(--rtc-cli)_var(--rtc-kebab)_0.75rem]";
 
 const COLUMN_WIDTHS = {
-  // Health folds the workload in as a suffix ("Healthy · 2 running") —
-  // same merge as the agents list's status cell.
   health: 176,
   owner: 96,
-  agents: 92,
   cost: 96,
   cli: 112,
 } as const;
 
-// Fixed tracks (edges 12+12, name min 140) plus the 8 gap-x-3 gaps
-// between the wide template's 9 tracks (zero-width tracks still carry
+// Fixed tracks (edges 12+12, name min 140) plus the 7 gap-x-3 gaps
+// between the wide template's 8 tracks (zero-width tracks still carry
 // gaps).
-const FIXED_TRACKS_WIDTH = 164 + 8 * 12;
+const FIXED_TRACKS_WIDTH = 164 + 7 * 12;
 
 // The kebab track is conditional like the owner column: on a list where
 // no row carries a delete-permission, EVERY row's only action is hidden,
@@ -104,14 +97,12 @@ function columnTrackVars(
     FIXED_TRACKS_WIDTH +
     COLUMN_WIDTHS.health +
     (showOwner ? COLUMN_WIDTHS.owner : 0) +
-    COLUMN_WIDTHS.agents +
     COLUMN_WIDTHS.cost +
     COLUMN_WIDTHS.cli +
     (showActions ? 28 : 0);
   return {
     "--rtc-health": `${COLUMN_WIDTHS.health}px`,
     "--rtc-owner": showOwner ? `${COLUMN_WIDTHS.owner}px` : "0px",
-    "--rtc-agents": `${COLUMN_WIDTHS.agents}px`,
     "--rtc-cost": `${COLUMN_WIDTHS.cost}px`,
     "--rtc-cli": `${COLUMN_WIDTHS.cli}px`,
     "--rtc-kebab": showActions ? "1.75rem" : "0px",
@@ -125,52 +116,24 @@ interface RuntimeWorkload {
   queuedCount: number;
 }
 
-const EMPTY_WORKLOAD: RuntimeWorkload = {
-  agentIds: [],
-  runningCount: 0,
-  queuedCount: 0,
-};
-
 export interface RuntimeRow {
   runtime: AgentRuntime;
   ownerMember: MemberWithUser | null;
-  workload: RuntimeWorkload;
   canDelete: boolean;
 }
 
-// Per-runtime workload snapshot — agent IDs serving this runtime (drives
-// the avatar stack; .length doubles as the agent count) plus task counts
-// split by status. Built once per render off the workspace-wide
-// agents / agent-task-snapshot caches; filtered locally — no extra requests.
+// Runtime rows cannot infer current workload from `agent.runtime_id` anymore:
+// agents declare provider/profile capability, while concrete runtimes are
+// selected per task and user-facing task audit responses redact runtime IDs.
+// Keep this helper as an explicit no-op so tests pin that we do not resurrect
+// the fixed-binding behavior.
 export function buildWorkloadIndex(
   agents: Agent[],
   tasks: AgentTask[],
 ): Map<string, RuntimeWorkload> {
-  const result = new Map<string, RuntimeWorkload>();
-  const agentToRuntime = new Map<string, string>();
-
-  for (const a of agents) {
-    if (!a.runtime_id || a.archived_at) continue;
-    agentToRuntime.set(a.id, a.runtime_id);
-    const entry =
-      result.get(a.runtime_id) ?? {
-        agentIds: [],
-        runningCount: 0,
-        queuedCount: 0,
-      };
-    entry.agentIds.push(a.id);
-    result.set(a.runtime_id, entry);
-  }
-  for (const t of tasks) {
-    const rid = agentToRuntime.get(t.agent_id);
-    if (!rid) continue;
-    const entry = result.get(rid);
-    if (!entry) continue;
-    if (t.status === "running") entry.runningCount += 1;
-    else if (t.status === "queued" || t.status === "dispatched")
-      entry.queuedCount += 1;
-  }
-  return result;
+  void agents;
+  void tasks;
+  return new Map<string, RuntimeWorkload>();
 }
 
 // ---------------------------------------------------------------------------
@@ -259,15 +222,12 @@ function VisibilityBadge({ runtime }: { runtime: AgentRuntime }) {
 // (a new deriveRuntimeHealth state), not to vocabulary hints here.
 function HealthCell({
   runtime,
-  workload,
   now,
 }: {
   runtime: AgentRuntime;
-  workload: RuntimeWorkload;
   now: number;
 }) {
   const { t } = useT("runtimes");
-  const { t: tAgents } = useT("agents");
   const labelOf = useHealthLabel();
   if (isPendingCustomRuntime(runtime)) {
     const warning = isPendingCustomRuntimeWarning(runtime, now);
@@ -288,9 +248,7 @@ function HealthCell({
   }
 
   const health = deriveRuntimeHealth(runtime, now);
-  const offline = health === "offline" || health === "about_to_gc";
   const lastSeen = formatLastSeen(runtime.last_seen_at);
-  const active = workload.runningCount + workload.queuedCount;
 
   return (
     <ListGridCell className="gap-1.5">
@@ -299,12 +257,6 @@ function HealthCell({
         {labelOf(health)}
         {health !== "online" && runtime.last_seen_at && (
           <span className="text-muted-foreground"> · {lastSeen}</span>
-        )}
-        {!offline && active > 0 && (
-          <span className="text-muted-foreground">
-            {" · "}
-            {tAgents(($) => $.row.task_count, { count: active })}
-          </span>
         )}
       </span>
     </ListGridCell>
@@ -421,36 +373,6 @@ export function CliCell({ runtime }: { runtime: AgentRuntime }) {
 // Stacks up to 3 agent avatars, then a "+N" pill if more bind to this
 // runtime. Each avatar uses the wrapping ActorAvatar so hover automatically
 // surfaces AgentProfileCard.
-function AgentStack({ agentIds }: { agentIds: string[] }) {
-  if (agentIds.length === 0) {
-    return <span className="text-xs text-muted-foreground/50">—</span>;
-  }
-  const visible = agentIds.slice(0, 3);
-  const extra = agentIds.length - visible.length;
-  return (
-    <div className="flex items-center -space-x-1.5">
-      {visible.map((id) => (
-        <span
-          key={id}
-          className="inline-flex rounded-full ring-2 ring-background"
-        >
-          <ActorAvatar
-            actorType="agent"
-            actorId={id}
-            size={22}
-            enableHoverCard
-          />
-        </span>
-      ))}
-      {extra > 0 && (
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground ring-2 ring-background">
-          +{extra}
-        </span>
-      )}
-    </div>
-  );
-}
-
 export function RuntimeRowMenu({
   runtime,
   wsId,
@@ -539,21 +461,7 @@ export function RuntimeList({
   const rowLink = useRowLink();
   const user = useAuthStore((s) => s.user);
 
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
-
-  const currentMember = user
-    ? members.find((m) => m.user_id === user.id)
-    : null;
-  const isAdmin = currentMember
-    ? currentMember.role === "owner" || currentMember.role === "admin"
-    : false;
-
-  const workloadIndex = useMemo(
-    () => buildWorkloadIndex(agents, snapshot),
-    [agents, snapshot],
-  );
 
   const memberById = useMemo(() => {
     const map = new Map<string, MemberWithUser>();
@@ -578,12 +486,12 @@ export function RuntimeList({
       ownerMember: runtime.owner_id
         ? memberById.get(runtime.owner_id) ?? null
         : null,
-      workload: workloadIndex.get(runtime.id) ?? EMPTY_WORKLOAD,
       canDelete:
         !isPendingCustomRuntime(runtime) &&
-        (isAdmin || (!!user && runtime.owner_id === user.id)),
+        !!user &&
+        runtime.owner_id === user.id,
     }));
-  }, [runtimes, memberById, workloadIndex, isAdmin, user]);
+  }, [runtimes, memberById, user]);
 
   // Mirrors RuntimeRowMenu's render guard: the kebab track only earns its
   // width when at least one row will actually show the menu.
@@ -607,9 +515,6 @@ export function RuntimeList({
           ) : (
             <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
           )}
-          <ListGridHeaderCell className="hidden @2xl:flex">
-            {t(($) => $.list.col_agents)}
-          </ListGridHeaderCell>
           <ListGridHeaderCell className="hidden @2xl:flex" align="right">
             {t(($) => $.list.col_cost)}
           </ListGridHeaderCell>
@@ -629,11 +534,7 @@ export function RuntimeList({
                 : {})}
             >
               <RuntimeNameCell runtime={row.runtime} />
-              <HealthCell
-                runtime={row.runtime}
-                workload={row.workload}
-                now={now}
-              />
+              <HealthCell runtime={row.runtime} now={now} />
               {showOwner ? (
                 <ListGridCell className="hidden gap-1.5 @2xl:flex">
                   {row.ownerMember ? (
@@ -654,9 +555,6 @@ export function RuntimeList({
               ) : (
                 <ListGridCell className="hidden px-0 @2xl:flex" />
               )}
-              <ListGridCell className="hidden @2xl:flex">
-                <AgentStack agentIds={row.workload.agentIds} />
-              </ListGridCell>
               <ListGridCell className="hidden @2xl:flex">
                 {pending ? (
                   <div className="w-full text-right">

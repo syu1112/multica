@@ -32,6 +32,60 @@ func withChatTestWorkspaceCtx(t *testing.T, req *http.Request) *http.Request {
 	return req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, memberRow))
 }
 
+func TestSendChatMessage_NoCompatibleRuntimeReturnsAgentUnavailable(t *testing.T) {
+	ctx := context.Background()
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, runtime_provider, visibility, max_concurrent_tasks, owner_id,
+			instructions, custom_env, custom_args, mcp_config
+		)
+		VALUES ($1, 'Chat No Compatible Runtime Agent', '', 'local', '{}'::jsonb,
+			NULL, 'missing_chat_runtime_provider', 'private', 1, $2,
+			'', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+	})
+
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	req := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "hi",
+	})
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.SendChatMessage(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("SendChatMessage: expected 422, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["code"] != "agent_unavailable" {
+		t.Fatalf("response code = %v, want agent_unavailable", resp["code"])
+	}
+
+	var taskCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM agent_task_queue WHERE chat_session_id = $1`,
+		sessionID,
+	).Scan(&taskCount); err != nil {
+		t.Fatalf("count chat tasks: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("expected no chat task when runtime resolution fails, got %d", taskCount)
+	}
+}
+
 // TestSendChatMessage_LinksAttachments verifies that attachments uploaded
 // against a chat_session (chat_message_id NULL) are back-filled with the
 // message_id when SendChatMessage receives the matching attachment_ids.

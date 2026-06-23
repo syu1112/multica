@@ -6,6 +6,8 @@ import {
   deriveAgentPresenceDetail,
   deriveWorkload,
   deriveWorkloadDetail,
+  firstCompatibleRuntimeForAgent,
+  runtimeMatchesAgentCapability,
 } from "./derive-presence";
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -13,6 +15,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     id: "agent-1",
     workspace_id: "ws-1",
     runtime_id: "rt-1",
+    runtime_provider: "claude",
+    runtime_profile_id: null,
     name: "Test Agent",
     description: "",
     instructions: "",
@@ -48,6 +52,7 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     metadata: {},
     owner_id: null,
     visibility: "private",
+    profile_id: null,
     last_seen_at: "2026-04-27T11:59:50Z",
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
@@ -366,6 +371,100 @@ describe("deriveAgentPresenceDetail", () => {
 });
 
 describe("buildPresenceMap", () => {
+  it("matches agents to local runtimes by provider capability before legacy runtime_id", () => {
+    const agent = makeAgent({ runtime_id: "legacy-rt", runtime_provider: "codex" });
+    const runtime = makeRuntime({ id: "current-user-rt", provider: "codex" });
+    const map = buildPresenceMap({
+      agents: [agent],
+      runtimes: [runtime],
+      snapshot: [],
+      now: NOW,
+    });
+
+    expect(runtimeMatchesAgentCapability(agent, runtime)).toBe(true);
+    expect(map.get(agent.id)?.availability).toBe("online");
+  });
+
+  it("does not use legacy runtime_id as a capability fallback", () => {
+    const agent = makeAgent({
+      runtime_id: "rt-1",
+      runtime_provider: "",
+      runtime_profile_id: null,
+    });
+    const map = buildPresenceMap({
+      agents: [agent],
+      runtimes: [makeRuntime({ id: "rt-1", provider: "claude" })],
+      snapshot: [],
+      now: NOW,
+    });
+
+    expect(map.get(agent.id)?.availability).toBe("offline");
+  });
+
+  it("selects only the current user's online compatible local runtime", () => {
+    const agent = makeAgent({ runtime_provider: "codex" });
+    const runtime = firstCompatibleRuntimeForAgent(
+      agent,
+      [
+        makeRuntime({
+          id: "other-user-runtime",
+          provider: "codex",
+          owner_id: "user-2",
+        }),
+        makeRuntime({
+          id: "offline-owned-runtime",
+          provider: "codex",
+          owner_id: "user-1",
+          status: "offline",
+        }),
+        makeRuntime({
+          id: "owned-runtime",
+          provider: "codex",
+          owner_id: "user-1",
+        }),
+      ],
+      { ownerId: "user-1", onlineOnly: true },
+    );
+
+    expect(runtime?.id).toBe("owned-runtime");
+  });
+
+  it("does not mark an agent online from another user's compatible runtime", () => {
+    const agent = makeAgent({ runtime_provider: "codex" });
+    const map = buildPresenceMap({
+      agents: [agent],
+      runtimes: [
+        makeRuntime({
+          id: "other-user-runtime",
+          provider: "codex",
+          owner_id: "user-2",
+        }),
+      ],
+      snapshot: [],
+      now: NOW,
+      ownerId: "user-1",
+    });
+
+    expect(map.get(agent.id)?.availability).toBe("offline");
+  });
+
+  it("does not match any runtime when owner filtering is requested without a current user", () => {
+    const agent = makeAgent({ runtime_provider: "codex" });
+    const runtime = firstCompatibleRuntimeForAgent(
+      agent,
+      [
+        makeRuntime({
+          id: "other-user-runtime",
+          provider: "codex",
+          owner_id: "user-2",
+        }),
+      ],
+      { ownerId: null, onlineOnly: true },
+    );
+
+    expect(runtime).toBeNull();
+  });
+
   it("returns one entry per agent, sourcing tasks by agent_id from a flat list", () => {
     const agentA = makeAgent({ id: "a", runtime_id: "rt-1" });
     const agentB = makeAgent({ id: "b", runtime_id: "rt-1" });

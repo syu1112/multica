@@ -48,6 +48,10 @@ const larkListingRef = vi.hoisted(() => ({
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector: (state: { user: { id: string } }) => unknown) =>
+    selector({ user: { id: "user-1" } }),
+}));
 vi.mock("@multica/core/lark", () => ({
   larkInstallationsOptions: () => ({
     queryKey: ["lark", "installations"],
@@ -66,6 +70,8 @@ const baseAgent: Agent = {
   instructions: "",
   avatar_url: null,
   runtime_mode: "local",
+  runtime_provider: "claude",
+  runtime_profile_id: null,
   runtime_config: {},
   custom_args: [],
   visibility: "workspace",
@@ -92,7 +98,7 @@ function makeRuntime(provider: string): AgentRuntime {
     status: "online",
     device_info: "",
     metadata: {},
-    owner_id: null,
+    owner_id: "user-1",
     visibility: "private",
     last_seen_at: null,
     created_at: "2026-05-28T00:00:00Z",
@@ -100,7 +106,7 @@ function makeRuntime(provider: string): AgentRuntime {
   };
 }
 
-function renderPane(runtimes: AgentRuntime[]) {
+function renderPane(runtimes: AgentRuntime[], agentOverrides: Partial<Agent> = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -108,7 +114,7 @@ function renderPane(runtimes: AgentRuntime[]) {
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
         <AgentOverviewPane
-          agent={baseAgent}
+          agent={{ ...baseAgent, ...agentOverrides }}
           runtimes={runtimes}
           onUpdate={vi.fn().mockResolvedValue(undefined)}
         />
@@ -139,7 +145,7 @@ describe("AgentOverviewPane MCP tab visibility", () => {
   it("hides the MCP tab for providers whose backend does not read mcp_config", () => {
     // Saving an MCP config on e.g. Gemini would be a silent no-op at run
     // time — that's the bug this hiding logic is meant to prevent.
-    renderPane([makeRuntime("gemini")]);
+    renderPane([makeRuntime("gemini")], { runtime_provider: "gemini" });
     expect(
       screen.queryByRole("button", { name: /^MCP$/i }),
     ).not.toBeInTheDocument();

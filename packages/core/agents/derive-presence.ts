@@ -132,6 +132,7 @@ export function buildPresenceMap(args: {
   // deriveWorkloadDetail (workload is current-state only).
   snapshot: readonly AgentTask[];
   now: number;
+  ownerId?: string | null;
 }): Map<string, AgentPresenceDetail> {
   const out = new Map<string, AgentPresenceDetail>();
   const runtimesById = new Map<string, AgentRuntime>();
@@ -146,10 +147,64 @@ export function buildPresenceMap(args: {
     else tasksByAgent.set(t.agent_id, [t]);
   }
 
+  const runtimeOptions =
+    args.ownerId === undefined ? {} : { ownerId: args.ownerId };
   for (const agent of args.agents) {
-    const runtime = runtimesById.get(agent.runtime_id) ?? null;
+    const runtime = runtimeForAgentCapability(
+      agent,
+      args.runtimes,
+      runtimesById,
+      runtimeOptions,
+    );
     const tasks = tasksByAgent.get(agent.id) ?? [];
     out.set(agent.id, deriveAgentPresenceDetail({ agent, runtime, tasks, now: args.now }));
   }
   return out;
+}
+
+export function runtimeForAgentCapability(
+  agent: Agent,
+  runtimes: readonly AgentRuntime[],
+  runtimesById: Map<string, AgentRuntime>,
+  options: {
+    ownerId?: string | null;
+    onlineOnly?: boolean;
+  } = {},
+): AgentRuntime | null {
+  void runtimesById;
+  return firstCompatibleRuntimeForAgent(agent, runtimes, options);
+}
+
+export function runtimeMatchesAgentCapability(
+  agent: Agent,
+  runtime: AgentRuntime,
+): boolean {
+  if (runtime.runtime_mode !== "local") return false;
+  if (agent.runtime_profile_id) {
+    return runtime.profile_id === agent.runtime_profile_id;
+  }
+  return (
+    !!agent.runtime_provider &&
+    !runtime.profile_id &&
+    runtime.provider === agent.runtime_provider
+  );
+}
+
+export function firstCompatibleRuntimeForAgent(
+  agent: Agent,
+  runtimes: readonly AgentRuntime[],
+  options: {
+    ownerId?: string | null;
+    onlineOnly?: boolean;
+  } = {},
+): AgentRuntime | null {
+  return (
+    runtimes.find((runtime) => {
+      if (options.onlineOnly && runtime.status !== "online") return false;
+      if ("ownerId" in options) {
+        if (!options.ownerId || runtime.owner_id !== options.ownerId) return false;
+      }
+      return runtimeMatchesAgentCapability(agent, runtime);
+    }) ?? null
+  );
 }

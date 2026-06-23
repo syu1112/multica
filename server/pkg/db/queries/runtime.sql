@@ -56,9 +56,12 @@ DO UPDATE SET
     status = EXCLUDED.status,
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,
-    owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
+    owner_id = COALESCE(agent_runtime.owner_id, EXCLUDED.owner_id),
     last_seen_at = now(),
     updated_at = now()
+WHERE agent_runtime.owner_id IS NULL
+   OR EXCLUDED.owner_id IS NULL
+   OR agent_runtime.owner_id = EXCLUDED.owner_id
 RETURNING *, (xmax = 0) AS inserted;
 
 -- name: UpsertAgentRuntimeWithProfile :one
@@ -90,16 +93,18 @@ DO UPDATE SET
     status = EXCLUDED.status,
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,
-    owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
+    owner_id = COALESCE(agent_runtime.owner_id, EXCLUDED.owner_id),
     last_seen_at = now(),
     updated_at = now()
+WHERE agent_runtime.owner_id IS NULL
+   OR EXCLUDED.owner_id IS NULL
+   OR agent_runtime.owner_id = EXCLUDED.owner_id
 RETURNING *, (xmax = 0) AS inserted;
 
 -- name: UpdateAgentRuntimeVisibility :one
--- Toggles a runtime between 'private' (only owner can bind agents) and
--- 'public' (any workspace member can). Default for new rows is 'private'
--- (see migration 083). Gated at the handler layer to owner / workspace
--- admin only.
+-- Toggles legacy runtime visibility metadata. Runtime invocation and agent
+-- capability conversion are owner-only; 'public' is retained for compatibility
+-- and must not be interpreted as permission for other workspace members.
 UPDATE agent_runtime
 SET visibility = @visibility, updated_at = now()
 WHERE id = @id
@@ -198,13 +203,46 @@ SELECT * FROM agent_runtime
 WHERE workspace_id = $1 AND owner_id = $2
 ORDER BY created_at ASC;
 
+-- name: FindUserRuntimeByProvider :one
+SELECT * FROM agent_runtime
+WHERE workspace_id = @workspace_id
+  AND owner_id = @owner_id
+  AND runtime_mode = 'local'
+  AND status = 'online'
+  AND provider = @provider
+  AND profile_id IS NULL
+ORDER BY created_at ASC, id ASC
+LIMIT 1;
+
+-- name: FindUserRuntimeByProfile :one
+SELECT * FROM agent_runtime
+WHERE workspace_id = @workspace_id
+  AND owner_id = @owner_id
+  AND runtime_mode = 'local'
+  AND status = 'online'
+  AND profile_id = @profile_id
+ORDER BY created_at ASC, id ASC
+LIMIT 1;
+
+-- name: ListUserCompatibleRuntimes :many
+SELECT * FROM agent_runtime
+WHERE workspace_id = @workspace_id
+  AND owner_id = @owner_id
+  AND runtime_mode = 'local'
+  AND status = 'online'
+  AND (
+    (@profile_id::uuid IS NOT NULL AND profile_id = @profile_id)
+    OR (@profile_id::uuid IS NULL AND provider = @provider AND profile_id IS NULL)
+  )
+ORDER BY created_at ASC, id ASC;
+
 -- name: ForceOfflineRuntimesByIDs :many
 -- Unconditionally flips a known set of runtime IDs to offline. Distinct from
 -- MarkRuntimesOfflineByIDs (which keeps a stale-window predicate so the
--- sweeper cannot demote a runtime that just heartbeated): this variant is
--- used by intentional revocation paths — e.g. removing a workspace member —
--- where the caller has already decided the runtime should be offline
--- regardless of recent liveness.
+-- sweeper cannot demote a runtime that just heartbeated). Do not call this
+-- from workspace membership removal or workspace admin flows: runtimes are
+-- owner-private resources, and owner/admin cannot disable another member's
+-- runtime as an indirect side effect.
 UPDATE agent_runtime
 SET status = 'offline', updated_at = now()
 WHERE id = ANY(@runtime_ids::uuid[]) AND status = 'online'
@@ -212,8 +250,8 @@ RETURNING id, workspace_id, owner_id, daemon_id, provider;
 
 -- name: CancelAgentTasksByRuntimeOrAgent :many
 -- Cancels every active task that either lives on one of the given runtimes
--- OR belongs to one of the given agents. Used by the member-revocation flow:
--- the runtime-side covers tasks queued against the leaving member's runtimes;
+-- OR belongs to one of the given agents. Used by the member-removal cleanup:
+-- the runtime-side covers tasks already queued against the leaving member's runtimes;
 -- the agent-side covers tasks pinned to a different runtime that those agents
 -- left behind from a prior UpdateAgent (agent.runtime_id can change, but
 -- agent_task_queue.runtime_id does not get rewritten when it does, so a task
@@ -298,6 +336,7 @@ WHERE leader_id IN (
 SELECT * FROM agent_runtime
 WHERE workspace_id = @workspace_id
   AND provider = @provider
+  AND owner_id = @owner_id
   AND LOWER(daemon_id) = LOWER(@daemon_id);
 
 -- name: ReassignAgentsToRuntime :execrows

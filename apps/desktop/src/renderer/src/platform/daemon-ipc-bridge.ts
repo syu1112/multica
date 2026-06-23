@@ -74,7 +74,7 @@ export function useDaemonIPCBridge(wsId: string | undefined): void {
 
     const unsubscribe = daemonAPI.onStatusChange((status) => {
       if (!status.daemonId) return;
-      qc.setQueryData<AgentRuntime[]>(runtimeKeys.list(wsId), (old) => {
+      qc.setQueryData<AgentRuntime[]>(runtimeKeys.listMine(wsId), (old) => {
         if (!old) return old;
         return old.map((rt) =>
           rt.daemon_id === status.daemonId ? mergeDaemonStatus(rt, status) : rt,

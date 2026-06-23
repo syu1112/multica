@@ -219,7 +219,7 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+	if _, ok := h.requireRuntimeOwner(w, r, rt); !ok {
 		return
 	}
 
@@ -257,7 +257,7 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "runtime not found")
 		return
 	}
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+	if _, ok := h.requireRuntimeOwner(w, r, rt); !ok {
 		return
 	}
 

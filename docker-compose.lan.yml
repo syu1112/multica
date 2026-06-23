@@ -1,0 +1,10 @@
+# Local override for LAN access. Keep the default self-host compose file bound
+# to loopback, and opt into this file only for trusted private networks.
+services:
+  backend:
+    ports: !override
+      - "0.0.0.0:${BACKEND_PORT:-8080}:8080"
+
+  frontend:
+    ports: !override
+      - "0.0.0.0:${FRONTEND_PORT:-3001}:3000"

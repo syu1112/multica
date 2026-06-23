@@ -50,6 +50,7 @@ vi.mock("@multica/core/auth", () => ({
 }));
 
 const mockListAgents = vi.fn();
+const mockListRuntimes = vi.fn();
 const mockCreateAgent = vi.fn();
 const mockCreateIssue = vi.fn();
 const mockCreateComment = vi.fn();
@@ -76,6 +77,7 @@ vi.mock("@multica/core/api", () => ({
   api: {
     getBaseUrl: () => "http://127.0.0.1:8080",
     listAgents: (...args: unknown[]) => mockListAgents(...args),
+    listRuntimes: (...args: unknown[]) => mockListRuntimes(...args),
     createAgent: (...args: unknown[]) => mockCreateAgent(...args),
     createIssue: (...args: unknown[]) => mockCreateIssue(...args),
     createComment: (...args: unknown[]) => mockCreateComment(...args),
@@ -125,6 +127,27 @@ function renderWelcome({ locale = "en" }: { locale?: SupportedLocale } = {}) {
 
 beforeEach(() => {
   mockListAgents.mockReset();
+  mockListRuntimes.mockReset();
+  mockListRuntimes.mockResolvedValue([
+    {
+      id: "rt-1",
+      workspace_id: "ws-1",
+      daemon_id: "daemon-1",
+      name: "Local Codex",
+      runtime_mode: "local",
+      provider: "codex",
+      profile_id: null,
+      launch_header: "",
+      status: "online",
+      device_info: "",
+      metadata: {},
+      owner_id: "user-1",
+      visibility: "private",
+      last_seen_at: null,
+      created_at: "",
+      updated_at: "",
+    },
+  ]);
   mockCreateAgent.mockReset();
   mockCreateIssue.mockReset();
   mockCreateComment.mockReset();
@@ -157,6 +180,26 @@ describe("WelcomeAfterOnboarding", () => {
   describe("runtime path", () => {
     it("creates a Helper agent then opens a blocking modal with starter cards", async () => {
       mockListAgents.mockResolvedValueOnce([]);
+      mockListRuntimes.mockResolvedValueOnce([
+        {
+          id: "rt-1",
+          workspace_id: "ws-1",
+          daemon_id: "daemon-1",
+          name: "Local Codex",
+          runtime_mode: "local",
+          provider: "codex",
+          profile_id: null,
+          launch_header: "",
+          status: "online",
+          device_info: "",
+          metadata: {},
+          owner_id: "user-1",
+          visibility: "private",
+          last_seen_at: null,
+          created_at: "",
+          updated_at: "",
+        },
+      ]);
       mockCreateAgent.mockResolvedValueOnce({
         id: "agent-1",
         name: "Multica Helper",
@@ -180,7 +223,9 @@ describe("WelcomeAfterOnboarding", () => {
 
       expect(mockCreateAgent).toHaveBeenCalledTimes(1);
       const [agentArgs] = mockCreateAgent.mock.calls[0]!;
-      expect(agentArgs.runtime_id).toBe("rt-1");
+      expect(agentArgs.runtime_id).toBeUndefined();
+      expect(agentArgs.runtime_provider).toBe("codex");
+      expect(agentArgs.runtime_profile_id).toBeNull();
       expect(agentArgs.name).toBe("Multica Helper");
       expect(agentArgs.instructions).toContain("Multica Helper");
 
@@ -281,6 +326,7 @@ describe("WelcomeAfterOnboarding", () => {
       mockCreateIssue.mock.calls.forEach(([args]) => {
         expect(args.assignee_type).toBe("agent");
         expect(args.assignee_id).toBe("agent-1");
+        expect(args.runtime_id).toBe("rt-1");
       });
 
       // After Promise.all resolves we DO NOT navigate immediately — the
@@ -300,6 +346,26 @@ describe("WelcomeAfterOnboarding", () => {
 
     it("uses Korean persisted Helper and starter issue artifacts under ko locale", async () => {
       mockListAgents.mockResolvedValueOnce([]);
+      mockListRuntimes.mockResolvedValueOnce([
+        {
+          id: "rt-1",
+          workspace_id: "ws-1",
+          daemon_id: "daemon-1",
+          name: "Local Codex",
+          runtime_mode: "local",
+          provider: "codex",
+          profile_id: "profile-1",
+          launch_header: "",
+          status: "online",
+          device_info: "",
+          metadata: {},
+          owner_id: "user-1",
+          visibility: "private",
+          last_seen_at: null,
+          created_at: "",
+          updated_at: "",
+        },
+      ]);
       mockCreateAgent.mockResolvedValueOnce({
         id: "agent-1",
         name: "Multica Helper",
@@ -327,6 +393,9 @@ describe("WelcomeAfterOnboarding", () => {
 
       expect(mockCreateAgent).toHaveBeenCalledTimes(1);
       const [agentArgs] = mockCreateAgent.mock.calls[0]!;
+      expect(agentArgs.runtime_id).toBeUndefined();
+      expect(agentArgs.runtime_provider).toBe("codex");
+      expect(agentArgs.runtime_profile_id).toBe("profile-1");
       expect(agentArgs.description).toContain("Multica 사용 어시스턴트");
       expect(agentArgs.instructions).toContain(
         "당신은 이 Multica 워크스페이스에 내장된 AI 어시스턴트",
@@ -347,6 +416,26 @@ describe("WelcomeAfterOnboarding", () => {
 
     it("uses Japanese persisted Helper and starter issue artifacts under ja locale", async () => {
       mockListAgents.mockResolvedValueOnce([]);
+      mockListRuntimes.mockResolvedValueOnce([
+        {
+          id: "rt-1",
+          workspace_id: "ws-1",
+          daemon_id: "daemon-1",
+          name: "Local Codex",
+          runtime_mode: "local",
+          provider: "codex",
+          profile_id: null,
+          launch_header: "",
+          status: "online",
+          device_info: "",
+          metadata: {},
+          owner_id: "user-1",
+          visibility: "private",
+          last_seen_at: null,
+          created_at: "",
+          updated_at: "",
+        },
+      ]);
       mockCreateAgent.mockResolvedValueOnce({
         id: "agent-1",
         name: "Multica Helper",
@@ -374,6 +463,9 @@ describe("WelcomeAfterOnboarding", () => {
 
       expect(mockCreateAgent).toHaveBeenCalledTimes(1);
       const [agentArgs] = mockCreateAgent.mock.calls[0]!;
+      expect(agentArgs.runtime_id).toBeUndefined();
+      expect(agentArgs.runtime_provider).toBe("codex");
+      expect(agentArgs.runtime_profile_id).toBeNull();
       expect(agentArgs.description).toContain("Multica の使い方アシスタント");
       expect(agentArgs.instructions).toContain(
         "あなたは Multica Helper、この Multica ワークスペースに組み込まれた AI アシスタント",

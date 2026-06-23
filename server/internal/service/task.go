@@ -18,6 +18,7 @@ import (
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/util"
+	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
@@ -132,6 +133,35 @@ func isTrivialDoneOutput(output string) bool {
 		}
 	}
 	return false
+}
+
+func noImplicitRuntimeRequester() pgtype.UUID {
+	return pgtype.UUID{}
+}
+
+func (s *TaskService) resolveRuntimeForTask(ctx context.Context, workspaceID pgtype.UUID, agent db.Agent, requesterID pgtype.UUID, selectedRuntimeID pgtype.UUID) (db.AgentRuntime, error) {
+	resolvedAgent, err := s.agentWithRuntimeCapability(ctx, agent)
+	if err != nil {
+		return db.AgentRuntime{}, err
+	}
+	return NewRuntimeResolver(s.Queries).Resolve(ctx, RuntimeResolveInput{
+		WorkspaceID:         workspaceID,
+		Agent:               resolvedAgent,
+		RequesterUserID:     requesterID,
+		ExplicitRuntimeID:   selectedRuntimeID,
+		AllowExplicitChoice: selectedRuntimeID.Valid,
+	})
+}
+
+func (s *TaskService) agentWithRuntimeCapability(ctx context.Context, agent db.Agent) (db.Agent, error) {
+	_ = ctx
+	if agent.RuntimeProfileID.Valid {
+		return agent, nil
+	}
+	if agent.RuntimeProvider != "" && agent.RuntimeProvider != "legacy_local" {
+		return agent, nil
+	}
+	return agent, ErrNoCompatibleRuntimeForUser
 }
 
 func (s *TaskService) captureTaskQueued(ctx context.Context, task db.AgentTaskQueue) {
@@ -434,7 +464,33 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 	if len(triggerCommentID) > 0 {
 		commentID = triggerCommentID[0]
 	}
-	return s.enqueueIssueTask(ctx, issue, commentID, false)
+	return s.enqueueIssueTask(ctx, issue, commentID, false, noImplicitRuntimeRequester(), pgtype.UUID{})
+}
+
+func (s *TaskService) EnqueueTaskForIssueByRequester(ctx context.Context, issue db.Issue, requesterID pgtype.UUID, selectedRuntimeID pgtype.UUID, triggerCommentID ...pgtype.UUID) (db.AgentTaskQueue, error) {
+	var commentID pgtype.UUID
+	if len(triggerCommentID) > 0 {
+		commentID = triggerCommentID[0]
+	}
+	return s.enqueueIssueTask(ctx, issue, commentID, false, requesterID, selectedRuntimeID)
+}
+
+func (s *TaskService) ResolveRuntimeForIssueByRequester(ctx context.Context, issue db.Issue, requesterID pgtype.UUID, selectedRuntimeID pgtype.UUID) (db.AgentRuntime, error) {
+	if !issue.AssigneeID.Valid {
+		return db.AgentRuntime{}, fmt.Errorf("issue has no assignee")
+	}
+	return s.ResolveRuntimeForAgentByRequester(ctx, issue.WorkspaceID, issue.AssigneeID, requesterID, selectedRuntimeID)
+}
+
+func (s *TaskService) ResolveRuntimeForAgentByRequester(ctx context.Context, workspaceID pgtype.UUID, agentID pgtype.UUID, requesterID pgtype.UUID, selectedRuntimeID pgtype.UUID) (db.AgentRuntime, error) {
+	agent, err := s.Queries.GetAgent(ctx, agentID)
+	if err != nil {
+		return db.AgentRuntime{}, fmt.Errorf("load agent: %w", err)
+	}
+	if agent.ArchivedAt.Valid {
+		return db.AgentRuntime{}, fmt.Errorf("agent is archived")
+	}
+	return s.resolveRuntimeForTask(ctx, workspaceID, agent, requesterID, selectedRuntimeID)
 }
 
 // enqueueIssueTask is the shared implementation behind EnqueueTaskForIssue
@@ -442,7 +498,7 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 // daemon claim handler skips the (agent_id, issue_id) resume lookup — the
 // user already judged the prior output bad, a fresh agent session is the
 // expected behavior.
-func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool, requesterID pgtype.UUID, selectedRuntimeID pgtype.UUID) (db.AgentTaskQueue, error) {
 	if !issue.AssigneeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "issue has no assignee")
 		return db.AgentTaskQueue{}, fmt.Errorf("issue has no assignee")
@@ -457,14 +513,15 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		slog.Debug("task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agent.ID))
 		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
 	}
-	if !agent.RuntimeID.Valid {
-		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "agent has no runtime")
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+	runtime, err := s.resolveRuntimeForTask(ctx, issue.WorkspaceID, agent, requesterID, selectedRuntimeID)
+	if err != nil {
+		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
+		return db.AgentTaskQueue{}, fmt.Errorf("resolve runtime: %w", err)
 	}
 
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:           issue.AssigneeID,
-		RuntimeID:         agent.RuntimeID,
+		RuntimeID:         runtime.ID,
 		IssueID:           issue.ID,
 		Priority:          priorityToInt(issue.Priority),
 		TriggerCommentID:  triggerCommentID,
@@ -497,7 +554,11 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 // Unlike EnqueueTaskForIssue, this takes an explicit agent ID rather than
 // deriving it from the issue assignee.
 func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
-	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, false, false)
+	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, false, false, noImplicitRuntimeRequester(), pgtype.UUID{})
+}
+
+func (s *TaskService) EnqueueTaskForMentionByRequester(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, requesterID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, false, false, requesterID, pgtype.UUID{})
 }
 
 // EnqueueTaskForSquadLeader is the leader-role variant of EnqueueTaskForMention.
@@ -507,10 +568,18 @@ func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue,
 // as a worker (do not skip). This matters for agents that are simultaneously
 // the leader and a worker of the same squad — see migration 090.
 func (s *TaskService) EnqueueTaskForSquadLeader(ctx context.Context, issue db.Issue, leaderID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
-	return s.enqueueMentionTask(ctx, issue, leaderID, triggerCommentID, true, false)
+	return s.enqueueMentionTask(ctx, issue, leaderID, triggerCommentID, true, false, noImplicitRuntimeRequester(), pgtype.UUID{})
 }
 
-func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueTaskForSquadLeaderByRequester(ctx context.Context, issue db.Issue, leaderID pgtype.UUID, triggerCommentID pgtype.UUID, requesterID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.EnqueueTaskForSquadLeaderByRequesterWithRuntime(ctx, issue, leaderID, triggerCommentID, requesterID, pgtype.UUID{})
+}
+
+func (s *TaskService) EnqueueTaskForSquadLeaderByRequesterWithRuntime(ctx context.Context, issue db.Issue, leaderID pgtype.UUID, triggerCommentID pgtype.UUID, requesterID pgtype.UUID, selectedRuntimeID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueMentionTask(ctx, issue, leaderID, triggerCommentID, true, false, requesterID, selectedRuntimeID)
+}
+
+func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool, requesterID pgtype.UUID, selectedRuntimeID pgtype.UUID) (db.AgentTaskQueue, error) {
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
 		slog.Error("mention task enqueue failed: agent not found", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -520,14 +589,15 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 		slog.Debug("mention task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
 		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
 	}
-	if !agent.RuntimeID.Valid {
-		slog.Error("mention task enqueue failed: agent has no runtime", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+	runtime, err := s.resolveRuntimeForTask(ctx, issue.WorkspaceID, agent, requesterID, selectedRuntimeID)
+	if err != nil {
+		slog.Error("mention task enqueue failed: resolve runtime", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
+		return db.AgentTaskQueue{}, fmt.Errorf("resolve runtime: %w", err)
 	}
 
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:           agentID,
-		RuntimeID:         agent.RuntimeID,
+		RuntimeID:         runtime.ID,
 		IssueID:           issue.ID,
 		Priority:          priorityToInt(issue.Priority),
 		TriggerCommentID:  triggerCommentID,
@@ -583,12 +653,36 @@ type QuickCreateContext struct {
 // QuickCreateContextType marks a task as a quick-create job.
 const QuickCreateContextType = "quick_create"
 
+type QuickCreateDaemonVersionError struct {
+	RuntimeID      pgtype.UUID
+	CurrentVersion string
+	MinVersion     string
+	Cause          error
+}
+
+func (e *QuickCreateDaemonVersionError) Error() string {
+	if e == nil {
+		return "quick-create daemon version unsupported"
+	}
+	if e.Cause != nil {
+		return fmt.Sprintf("quick-create daemon version unsupported: %v", e.Cause)
+	}
+	return "quick-create daemon version unsupported"
+}
+
+func (e *QuickCreateDaemonVersionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 // EnqueueQuickCreateTask creates a queued task that has no issue / chat /
 // autopilot link — the user's natural-language prompt is stored in the
 // task's context JSONB and the agent is expected to translate it into a
 // `multica issue create` call. Pre-validates that the agent is reachable
-// (not archived, has a runtime) so the API can reject up-front rather than
-// queue a task no one will ever claim.
+// for the requester so the API can reject up-front rather than queue a
+// task no one will ever claim.
 //
 // projectID is optional (zero-valued pgtype.UUID when the user didn't pick
 // one). The handler is responsible for validating it belongs to the same
@@ -599,10 +693,13 @@ const QuickCreateContextType = "quick_create"
 // agentID; the squadID hint is stamped into the task context so the daemon
 // claim handler can inject the squad-leader briefing on dispatch.
 //
+// selectedRuntimeID is optional. When present, the resolver validates that it
+// belongs to the requester and satisfies the agent capability before queueing.
+//
 // parentIssueID is optional (zero-valued pgtype.UUID when the user didn't
 // open the modal from "Add sub issue"). The handler is responsible for
 // validating it belongs to the same workspace before passing it in.
-func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID pgtype.UUID, agentID, squadID pgtype.UUID, prompt string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID pgtype.UUID, agentID, squadID pgtype.UUID, selectedRuntimeID pgtype.UUID, prompt string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID) (db.AgentTaskQueue, error) {
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
@@ -610,8 +707,12 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	if agent.ArchivedAt.Valid {
 		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
 	}
-	if !agent.RuntimeID.Valid {
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+	runtime, err := s.resolveRuntimeForTask(ctx, workspaceID, agent, requesterID, selectedRuntimeID)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("resolve runtime: %w", err)
+	}
+	if err := checkQuickCreateRuntimeVersion(runtime); err != nil {
+		return db.AgentTaskQueue{}, err
 	}
 
 	payload := QuickCreateContext{
@@ -644,7 +745,7 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 
 	task, err := s.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
 		AgentID:   agentID,
-		RuntimeID: agent.RuntimeID,
+		RuntimeID: runtime.ID,
 		Priority:  priorityToInt("high"),
 		Context:   contextJSON,
 	})
@@ -670,6 +771,33 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	return task, nil
 }
 
+func checkQuickCreateRuntimeVersion(runtime db.AgentRuntime) error {
+	current := readRuntimeCLIVersion(runtime.Metadata)
+	if err := agentpkg.CheckMinCLIVersion(current); err != nil {
+		return &QuickCreateDaemonVersionError{
+			RuntimeID:      runtime.ID,
+			CurrentVersion: current,
+			MinVersion:     agentpkg.MinQuickCreateCLIVersion,
+			Cause:          err,
+		}
+	}
+	return nil
+}
+
+func readRuntimeCLIVersion(metadata []byte) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(metadata, &m); err != nil {
+		return ""
+	}
+	if v, ok := m["cli_version"].(string); ok {
+		return v
+	}
+	return ""
+}
+
 // ErrChatTaskAgentArchived signals that EnqueueChatTask refused to
 // queue work because the destination agent has been archived. This
 // is a productizable state — surface it to the user as "this agent
@@ -677,14 +805,9 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 var ErrChatTaskAgentArchived = errors.New("chat task: agent archived")
 
 // ErrChatTaskAgentNoRuntime signals that EnqueueChatTask refused to
-// queue work because the agent has never been associated with a
-// runtime (agent.runtime_id IS NULL). This is the "agent has no
-// daemon configured" case — productizable as "agent offline".
-//
-// IMPORTANT: this is NOT the same as "the daemon is currently
-// disconnected". When agent.runtime_id IS set, EnqueueChatTask
-// enqueues the task and the daemon claims it on next online; that
-// path returns a task row, not this error.
+// queue work because this chat sender cannot be routed: either the agent
+// has no runtime capability, or the sender has no compatible online local
+// runtime. This is productizable as "connect a compatible local runtime".
 var ErrChatTaskAgentNoRuntime = errors.New("chat task: agent has no runtime")
 
 // EnqueueChatTask creates a queued task for a chat session.
@@ -692,7 +815,7 @@ var ErrChatTaskAgentNoRuntime = errors.New("chat task: agent has no runtime")
 //
 // Errors split into two layers:
 //
-//   - Productizable rejections (agent archived, no runtime) return
+//   - Productizable rejections (agent archived, no compatible runtime) return
 //     the sentinel errors above. Callers (e.g. the Lark dispatcher)
 //     can errors.Is them to decide a user-visible outcome.
 //
@@ -716,13 +839,17 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	if agent.ArchivedAt.Valid {
 		return db.AgentTaskQueue{}, ErrChatTaskAgentArchived
 	}
-	if !agent.RuntimeID.Valid {
-		return db.AgentTaskQueue{}, ErrChatTaskAgentNoRuntime
+	runtime, err := s.resolveRuntimeForTask(ctx, chatSession.WorkspaceID, agent, initiatorUserID, chatSession.RuntimeID)
+	if err != nil {
+		if runtimeResolutionUserFacing(err) {
+			return db.AgentTaskQueue{}, fmt.Errorf("%w: %w", ErrChatTaskAgentNoRuntime, err)
+		}
+		return db.AgentTaskQueue{}, fmt.Errorf("resolve runtime: %w", err)
 	}
 
 	task, err := s.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
 		AgentID:         chatSession.AgentID,
-		RuntimeID:       agent.RuntimeID,
+		RuntimeID:       runtime.ID,
 		Priority:        2, // medium priority for chat
 		ChatSessionID:   chatSession.ID,
 		InitiatorUserID: initiatorUserID,
@@ -1614,7 +1741,7 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 // Tasks owned by other agents on the same issue (e.g. a parallel
 // @-mention agent) are left alone — rerun must not collateral-cancel
 // them.
-func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourceTaskID pgtype.UUID, triggerCommentID pgtype.UUID) (*db.AgentTaskQueue, error) {
+func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, requesterID pgtype.UUID, sourceTaskID pgtype.UUID, triggerCommentID pgtype.UUID) (*db.AgentTaskQueue, error) {
 	issue, err := s.Queries.GetIssue(ctx, issueID)
 	if err != nil {
 		return nil, fmt.Errorf("load issue: %w", err)
@@ -1678,7 +1805,7 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
 
-	task, err := s.enqueueRerunTask(ctx, issue, agentID, triggerCommentID, isLeader)
+	task, err := s.enqueueRerunTask(ctx, issue, agentID, triggerCommentID, isLeader, requesterID)
 	if err != nil {
 		return nil, err
 	}
@@ -1699,12 +1826,12 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 // stays in sync; otherwise (squad member, prior assignee that has since been
 // reassigned, mention agent) we use the mention path with the same
 // force_fresh_session=true contract.
-func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, requesterID pgtype.UUID) (db.AgentTaskQueue, error) {
 	if issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid &&
 		util.UUIDToString(issue.AssigneeID) == util.UUIDToString(agentID) {
-		return s.enqueueIssueTask(ctx, issue, triggerCommentID, true)
+		return s.enqueueIssueTask(ctx, issue, triggerCommentID, true, requesterID, pgtype.UUID{})
 	}
-	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, isLeader, true)
+	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, isLeader, true, requesterID, pgtype.UUID{})
 }
 
 // HandleFailedTasks runs the post-failure side effects for a batch of
@@ -1965,7 +2092,9 @@ func (s *TaskService) notifyTaskAvailable(task db.AgentTaskQueue) {
 	// just-queued task until the TTL expires. The cache itself bounds
 	// every Redis call with a short timeout so a wedged Redis cannot
 	// block enqueue.
-	s.EmptyClaim.Bump(context.Background(), runtimeKey)
+	if s.EmptyClaim != nil {
+		s.EmptyClaim.Bump(context.Background(), runtimeKey)
+	}
 	if s.Wakeup == nil {
 		return
 	}
@@ -1973,17 +2102,11 @@ func (s *TaskService) notifyTaskAvailable(task db.AgentTaskQueue) {
 }
 
 func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTaskQueue) {
-	var payload map[string]any
-	if task.Context != nil {
-		json.Unmarshal(task.Context, &payload)
+	payload := map[string]any{
+		"task_id":  util.UUIDToString(task.ID),
+		"issue_id": util.UUIDToString(task.IssueID),
+		"agent_id": util.UUIDToString(task.AgentID),
 	}
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	payload["task_id"] = util.UUIDToString(task.ID)
-	payload["runtime_id"] = util.UUIDToString(task.RuntimeID)
-	payload["issue_id"] = util.UUIDToString(task.IssueID)
-	payload["agent_id"] = util.UUIDToString(task.AgentID)
 	// chat_session_id is the routing key the chat window uses to writethrough
 	// `chatKeys.pendingTask` to status="running" the moment the daemon claims
 	// the task. Without it the pill stays stuck at "Queued" until completion.
@@ -2441,10 +2564,16 @@ func agentToMap(a db.Agent) map[string]any {
 	if a.RuntimeConfig != nil {
 		json.Unmarshal(a.RuntimeConfig, &rc)
 	}
+	var runtimeProfileID any
+	if a.RuntimeProfileID.Valid {
+		runtimeProfileID = util.UUIDToString(a.RuntimeProfileID)
+	}
 	return map[string]any{
 		"id":                   util.UUIDToString(a.ID),
 		"workspace_id":         util.UUIDToString(a.WorkspaceID),
-		"runtime_id":           util.UUIDToString(a.RuntimeID),
+		"runtime_id":           nil,
+		"runtime_provider":     a.RuntimeProvider,
+		"runtime_profile_id":   runtimeProfileID,
 		"name":                 a.Name,
 		"description":          a.Description,
 		"avatar_url":           util.TextToPtr(a.AvatarUrl),

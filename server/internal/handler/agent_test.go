@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestListWorkspaceAgentTaskSnapshot covers the agent presence snapshot endpoint:
@@ -187,6 +189,97 @@ func TestCreateAgent_RejectsDuplicateName(t *testing.T) {
 	testHandler.CreateAgent(w2, newRequest(http.MethodPost, "/api/agents", body))
 	if w2.Code != http.StatusConflict {
 		t.Fatalf("second CreateAgent with duplicate name: expected 409, got %d: %s", w2.Code, w2.Body.String())
+	}
+}
+
+func TestCreateAgent_RuntimeProviderResponseHasNullRuntimeID(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentName := "runtime-provider-null-runtime-test"
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(),
+			`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
+			testWorkspaceID, agentName,
+		)
+	})
+
+	body := map[string]any{
+		"name":                 agentName,
+		"description":          "",
+		"runtime_provider":     "codex",
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+	}
+	w := httptest.NewRecorder()
+	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	raw := rawJSONResponse(t, w.Body.Bytes())
+	if raw["runtime_id"] != nil {
+		t.Fatalf("CreateAgent response runtime_id = %v, want null", raw["runtime_id"])
+	}
+	if raw["runtime_provider"] != "codex" {
+		t.Fatalf("CreateAgent response runtime_provider = %v, want codex", raw["runtime_provider"])
+	}
+
+	var resp AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.RuntimeID != nil {
+		t.Fatalf("typed response RuntimeID = %v, want nil", *resp.RuntimeID)
+	}
+
+	var runtimeID pgtype.Text
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT runtime_id::text FROM agent WHERE id = $1`,
+		resp.ID,
+	).Scan(&runtimeID); err != nil {
+		t.Fatalf("read created agent runtime_id: %v", err)
+	}
+	if runtimeID.Valid {
+		t.Fatalf("agent.runtime_id = %s, want NULL", runtimeID.String)
+	}
+}
+
+func TestCreateAgent_RejectsMissingRuntimeCapability(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentName := "missing-runtime-capability-test"
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(),
+			`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
+			testWorkspaceID, agentName,
+		)
+	})
+
+	body := map[string]any{
+		"name":                 agentName,
+		"description":          "",
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+	}
+	w := httptest.NewRecorder()
+	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("CreateAgent without runtime capability: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, agentName,
+	).Scan(&count); err != nil {
+		t.Fatalf("count agent rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("CreateAgent without runtime capability created %d rows", count)
 	}
 }
 

@@ -27,6 +27,7 @@ import {
   useWorkspacePresenceMap,
   VISIBILITY_TOOLTIP,
   type AgentPresenceDetail,
+  runtimeForAgentCapability,
 } from "@multica/core/agents";
 import {
   useAgentsViewStore,
@@ -804,7 +805,7 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     error: listError,
     refetch: refetchList,
   } = useQuery(agentListOptions(wsId));
-  const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(
+  const { data: runtimes = [] } = useQuery(
     runtimeListOptions(wsId),
   );
   const { data: members = [] } = useQuery(memberListOptions(wsId));
@@ -903,7 +904,9 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
       const activity = activityMap.get(agent.id) ?? null;
       return {
         agent,
-        runtime: runtimesById.get(agent.runtime_id) ?? null,
+        runtime: runtimeForAgentCapability(agent, runtimes, runtimesById, {
+          ownerId: currentUser?.id ?? null,
+        }),
         presence: presenceMap.get(agent.id) ?? null,
         activity,
         runCount: runCountsById.get(agent.id) ?? 0,
@@ -917,6 +920,7 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     agents,
     scope,
     currentUser,
+    runtimes,
     runtimesById,
     membersById,
     presenceMap,
@@ -937,7 +941,7 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
       }
       if (
         filters.runtimes.length > 0 &&
-        !filters.runtimes.includes(row.agent.runtime_id)
+        (!row.runtime || !filters.runtimes.includes(row.runtime.id))
       ) {
         return false;
       }
@@ -1209,7 +1213,6 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
       {showCreate && (
         <CreateAgentDialog
           runtimes={runtimes}
-          runtimesLoading={runtimesLoading}
           members={members}
           currentUserId={currentUser?.id ?? null}
           template={duplicateTemplate}

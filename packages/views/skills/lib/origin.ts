@@ -9,7 +9,6 @@ import type { Skill, SkillSummary } from "@multica/core/types";
 export type OriginInfo = {
   type: "runtime_local" | "clawhub" | "skills_sh" | "github" | "manual";
   provider?: string;
-  runtime_id?: string;
   source_path?: string;
   source_url?: string;
 };
@@ -18,7 +17,16 @@ export function readOrigin(skill: SkillSummary): OriginInfo {
   const raw = (skill.config?.origin ?? null) as
     | (OriginInfo & Record<string, unknown>)
     | null;
-  if (raw?.type === "runtime_local") return raw;
+  if (raw?.type === "runtime_local") {
+    return {
+      type: "runtime_local",
+      provider: typeof raw.provider === "string" ? raw.provider : undefined,
+      source_path:
+        typeof raw.source_path === "string" ? raw.source_path : undefined,
+      source_url:
+        typeof raw.source_url === "string" ? raw.source_url : undefined,
+    };
+  }
   if (raw?.type === "clawhub") return raw;
   if (raw?.type === "skills_sh") return raw;
   if (raw?.type === "github") return raw;

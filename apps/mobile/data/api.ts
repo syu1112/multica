@@ -503,11 +503,11 @@ class ApiClient {
     });
   }
 
-  // Workspace runtimes — feeds the presence dot's availability dimension
-  // (runtime.status + last_seen_at). Backend route registered in
-  // server/cmd/server/router.go:514 (GET /api/runtimes).
+  // Current user's runtimes — feeds the presence dot's availability dimension
+  // (runtime.status + last_seen_at). This must mirror web's owner=me query:
+  // runtimes are owner-only resources, including for workspace owner/admin.
   async listRuntimes(opts?: { signal?: AbortSignal }): Promise<RuntimeDevice[]> {
-    const raw = await this.fetch<unknown>("/api/runtimes", {
+    const raw = await this.fetch<unknown>("/api/runtimes?owner=me", {
       signal: opts?.signal,
     });
     return parseWithFallback(raw, RuntimeListSchema, EMPTY_RUNTIME_LIST, {

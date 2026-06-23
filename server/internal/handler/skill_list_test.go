@@ -76,6 +76,59 @@ func TestGetSkill_IncludesContent(t *testing.T) {
 	}
 }
 
+func TestSkillResponsesRedactRuntimeLocalOriginID(t *testing.T) {
+	skillID := insertHandlerTestSkillWithConfig(t, "runtime-origin-redacted", "# body", `{
+		"origin": {
+			"type": "runtime_local",
+			"runtime_id": "11111111-2222-3333-4444-555555555555",
+			"provider": "codex",
+			"source_path": "~/.codex/skills/review"
+		}
+	}`)
+
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/skills?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListSkills(w, req)
+	if w.Code != 200 {
+		t.Fatalf("ListSkills: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("ListSkills: failed to decode body: %v", err)
+	}
+	var listOrigin map[string]any
+	for _, row := range rows {
+		if row["id"] != skillID {
+			continue
+		}
+		config, _ := row["config"].(map[string]any)
+		listOrigin, _ = config["origin"].(map[string]any)
+		break
+	}
+	if listOrigin == nil {
+		t.Fatalf("ListSkills: did not find skill origin for %s", skillID)
+	}
+	assertRuntimeLocalOriginRedacted(t, listOrigin)
+
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/skills/"+skillID, nil)
+	req = withURLParam(req, "id", skillID)
+	testHandler.GetSkill(w, req)
+	if w.Code != 200 {
+		t.Fatalf("GetSkill: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("GetSkill: failed to decode body: %v", err)
+	}
+	config, _ := detail["config"].(map[string]any)
+	detailOrigin, _ := config["origin"].(map[string]any)
+	if detailOrigin == nil {
+		t.Fatalf("GetSkill: did not return origin for %s", skillID)
+	}
+	assertRuntimeLocalOriginRedacted(t, detailOrigin)
+}
+
 // TestListAgentSkills_OmitsContent: same constraint for the agent-scoped
 // listing — gpt-boy review of the original fix flagged this as a sister case
 // because `multica agent skills list` follows the same shape rules.
@@ -132,17 +185,32 @@ func TestGetSkill_MalformedUUIDReturns400(t *testing.T) {
 // list/detail wire shape and to make it easy to inject a large body.
 func insertHandlerTestSkill(t *testing.T, namePrefix, content string) string {
 	t.Helper()
+	return insertHandlerTestSkillWithConfig(t, namePrefix, content, `{}`)
+}
+
+func insertHandlerTestSkillWithConfig(t *testing.T, namePrefix, content, config string) string {
+	t.Helper()
 	name := namePrefix + "-" + t.Name()
 	var id string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO skill (workspace_id, name, description, content, config, created_by)
-		VALUES ($1, $2, $3, $4, '{}'::jsonb, $5)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6)
 		RETURNING id
-	`, testWorkspaceID, name, "fixture", content, testUserID).Scan(&id); err != nil {
+	`, testWorkspaceID, name, "fixture", content, config, testUserID).Scan(&id); err != nil {
 		t.Fatalf("insert skill: %v", err)
 	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM skill WHERE id = $1`, id)
 	})
 	return id
+}
+
+func assertRuntimeLocalOriginRedacted(t *testing.T, origin map[string]any) {
+	t.Helper()
+	if _, ok := origin["runtime_id"]; ok {
+		t.Fatalf("origin leaked runtime_id: %v", origin)
+	}
+	if origin["type"] != "runtime_local" || origin["provider"] != "codex" {
+		t.Fatalf("origin did not retain runtime provenance summary: %v", origin)
+	}
 }

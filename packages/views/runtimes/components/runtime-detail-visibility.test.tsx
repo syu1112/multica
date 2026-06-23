@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import type { AgentRuntime } from "@multica/core/types";
+import type { Agent, AgentRuntime } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
@@ -14,6 +14,7 @@ const TEST_RESOURCES = {
 };
 
 const mockUpdateRuntime = vi.hoisted(() => vi.fn());
+const mockAgents = vi.hoisted(() => ({ current: [] as Agent[] }));
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -48,7 +49,13 @@ vi.mock("@tanstack/react-query", async () => {
     );
   return {
     ...actual,
-    useQuery: vi.fn(() => ({ data: [], isLoading: false })),
+    useQuery: vi.fn((options: { queryKey?: readonly unknown[] }) => {
+      const key = options?.queryKey;
+      if (Array.isArray(key) && key[2] === "agents") {
+        return { data: mockAgents.current, isLoading: false };
+      }
+      return { data: [], isLoading: false };
+    }),
   };
 });
 
@@ -130,6 +137,34 @@ function makeRuntime(overrides: Partial<AgentRuntime>): AgentRuntime {
   };
 }
 
+function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: "agent-1",
+    workspace_id: "ws-1",
+    runtime_id: "rt-1",
+    runtime_provider: "codex",
+    runtime_profile_id: null,
+    name: "Legacy bound agent",
+    description: "",
+    instructions: "",
+    avatar_url: null,
+    runtime_mode: "local",
+    runtime_config: {},
+    custom_args: [],
+    visibility: "private",
+    status: "idle",
+    max_concurrent_tasks: 1,
+    model: "gpt-5.4",
+    owner_id: "user-me",
+    skills: [],
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    archived_at: null,
+    archived_by: null,
+    ...overrides,
+  };
+}
+
 function renderDetail(runtime: AgentRuntime) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -142,7 +177,10 @@ function renderDetail(runtime: AgentRuntime) {
 }
 
 describe("RuntimeDetail visibility section", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAgents.current = [];
+  });
 
   it("shows owner-editable visibility choices when the caller owns the runtime", () => {
     renderDetail(makeRuntime({ owner_id: "user-me" }));
@@ -169,7 +207,7 @@ describe("RuntimeDetail visibility section", () => {
   // MUL-3352: an owner viewing an online local (self-healing) runtime
   // used to see a disabled Delete button with only a hover tooltip
   // explaining why. The new contract: the button is always clickable
-  // for owner/admin; the dialog now carries the self-heal warning.
+  // for the runtime owner; the dialog now carries the self-heal warning.
   it("renders an enabled Delete runtime button for an owner on a self-healing local runtime", () => {
     renderDetail(
       makeRuntime({
@@ -195,5 +233,14 @@ describe("RuntimeDetail visibility section", () => {
     expect(
       screen.queryByRole("button", { name: /Delete runtime/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not show legacy runtime-bound agents as serving this runtime", () => {
+    mockAgents.current = [makeAgent({ runtime_id: "rt-1" })];
+
+    renderDetail(makeRuntime({ owner_id: "user-me" }));
+
+    expect(screen.queryByText("Serving")).not.toBeInTheDocument();
+    expect(screen.queryByText("Legacy bound agent")).not.toBeInTheDocument();
   });
 });

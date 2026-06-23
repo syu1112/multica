@@ -33,13 +33,14 @@ import { isSelfHealingRuntime } from "../utils";
 // DeleteRuntimeDialog is the single confirmation surface for runtime
 // deletion across the list-page kebab and the detail-page Diagnostics
 // card. It runs in two modes that share the same shell — light when no
-// agents are bound (matches the legacy "are you sure" prompt) and
-// cascade when active agents would be archived as part of the delete.
+// legacy-bound agents exist (matches the legacy "are you sure" prompt) and
+// cascade when old agent.runtime_id rows would be archived as part of the delete.
 //
 // Mode is decided dynamically:
 //   1. Initial: peek at the cached agent list and pick light vs cascade
-//      based on whether any active agent.runtime_id === runtime.id. This
-//      lets the dialog open in the right state without an extra request.
+//      based on whether any active legacy agent.runtime_id === runtime.id.
+//      New agents store provider/profile capability instead of a concrete
+//      runtime binding, so they are not part of this delete cascade.
 //   2. After the strict DELETE: if the server refuses with
 //      `runtime_has_active_agents` (the local data was stale), switch to
 //      cascade mode using the server's authoritative agent list.

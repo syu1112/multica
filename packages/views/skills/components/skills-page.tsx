@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import type {
   Agent,
-  AgentRuntime,
   MemberWithUser,
   Skill,
   SkillSummary,
@@ -29,7 +28,6 @@ import {
   selectSkillAssignments,
   skillListOptions,
 } from "@multica/core/workspace/queries";
-import { runtimeListOptions } from "@multica/core/runtimes";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
@@ -149,7 +147,6 @@ export interface SkillRow {
   skill: SkillSummary;
   agents: Agent[];
   creator: MemberWithUser | null;
-  runtime: AgentRuntime | null;
   originType: OriginInfo["type"];
   canEdit: boolean;
 }
@@ -332,10 +329,8 @@ function UsedByCell({ agents }: { agents: Agent[] }) {
 
 function SourceCell({
   skill,
-  runtime,
 }: {
   skill: SkillSummary;
-  runtime: AgentRuntime | null;
 }) {
   const { t } = useT("skills");
   const origin = readOrigin(skill);
@@ -344,13 +339,11 @@ function SourceCell({
   let label: string = t(($) => $.table.source_manual);
   if (origin.type === "runtime_local") {
     icon = <HardDrive className="h-3 w-3 shrink-0" />;
-    label = runtime
-      ? t(($) => $.table.source_runtime_named, { name: runtime.name })
-      : origin.provider
-        ? t(($) => $.table.source_runtime_provider, {
-            provider: origin.provider,
-          })
-        : t(($) => $.table.source_runtime_unknown);
+    label = origin.provider
+      ? t(($) => $.table.source_runtime_provider, {
+          provider: origin.provider,
+        })
+      : t(($) => $.table.source_runtime_unknown);
   } else if (origin.type === "clawhub") {
     icon = <Download className="h-3 w-3 shrink-0" />;
     label = t(($) => $.table.source_clawhub);
@@ -593,9 +586,6 @@ export default function SkillsPage() {
   const { data: members = [], error: membersError } = useQuery(
     memberListOptions(wsId),
   );
-  const { data: runtimes = [], error: runtimesError } = useQuery(
-    runtimeListOptions(wsId),
-  );
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
@@ -637,12 +627,6 @@ export default function SkillsPage() {
     return map;
   }, [members]);
 
-  const runtimesById = useMemo(() => {
-    const map = new Map<string, AgentRuntime>();
-    for (const r of runtimes) map.set(r.id, r);
-    return map;
-  }, [runtimes]);
-
   const myRole =
     members.find((m: MemberWithUser) => m.user_id === currentUserId)?.role ??
     null;
@@ -659,22 +643,17 @@ export default function SkillsPage() {
   const allRows = useMemo<SkillRow[]>(() => {
     return skills.map((skill) => {
       const origin = readOrigin(skill);
-      const runtime =
-        origin.type === "runtime_local" && origin.runtime_id
-          ? runtimesById.get(origin.runtime_id) ?? null
-          : null;
       return {
         skill,
         agents: assignments.get(skill.id) ?? [],
         creator: skill.created_by
           ? membersById.get(skill.created_by) ?? null
           : null,
-        runtime,
         originType: origin.type,
         canEdit: canEditSkill(skill, { userId: currentUserId, role: myRole }),
       };
     });
-  }, [skills, assignments, membersById, runtimesById, currentUserId, myRole]);
+  }, [skills, assignments, membersById, currentUserId, myRole]);
 
   // Visible rows: name search + filters, then sort.
   const rows = useMemo<SkillRow[]>(() => {
@@ -792,7 +771,7 @@ export default function SkillsPage() {
   const totalCount = skills.length;
   const showEmpty = !isLoading && totalCount === 0;
   const supportingQueryDown =
-    !!agentsError || !!membersError || !!runtimesError;
+    !!agentsError || !!membersError;
 
   // Unmounted rows above/below the visible slice become padding on the
   // scrolling body, exactly like Linear's --x-paddingTop/Bottom offsets.
@@ -901,7 +880,7 @@ export default function SkillsPage() {
                   <ListGridCell className="px-0" />
                 )}
                 {isColVisible("source") ? (
-                  <SourceCell skill={row.skill} runtime={row.runtime} />
+                  <SourceCell skill={row.skill} />
                 ) : (
                   <ListGridCell className="hidden px-0 @2xl:flex" />
                 )}

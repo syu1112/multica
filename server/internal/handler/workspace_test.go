@@ -506,8 +506,9 @@ RETURNING id
 		t.Fatalf("insert task: %v", err)
 	}
 
-	// daemon_token row — paired with the runtime's daemon_id so the
-	// revocation should sweep its hash up via DeleteDaemonTokensByWorkspaceAndDaemons.
+	// daemon_token row paired with the runtime's daemon_id. Member removal
+	// must preserve it because daemon credentials belong to the runtime owner,
+	// not the workspace admin who may remove the member row.
 	rawToken := "mdt_test_" + slug
 	sum := sha256.Sum256([]byte(rawToken))
 	tokenHash := hex.EncodeToString(sum[:])
@@ -530,7 +531,7 @@ VALUES ($1, $2, $3, now() + interval '1 day')
 	}
 }
 
-func assertRevoked(t *testing.T, fx revocationFixture) {
+func assertWorkspaceStateRevoked(t *testing.T, fx revocationFixture) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -546,8 +547,8 @@ func assertRevoked(t *testing.T, fx revocationFixture) {
 	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE id = $1`, fx.RuntimeID).Scan(&runtimeStatus); err != nil {
 		t.Fatalf("query runtime: %v", err)
 	}
-	if runtimeStatus != "offline" {
-		t.Fatalf("expected runtime offline, got %q", runtimeStatus)
+	if runtimeStatus != "online" {
+		t.Fatalf("member removal must not force another user's runtime offline, got %q", runtimeStatus)
 	}
 
 	var archivedAt *string
@@ -570,17 +571,15 @@ func assertRevoked(t *testing.T, fx revocationFixture) {
 	if err := testPool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM daemon_token WHERE token_hash = $1)`, fx.TokenHash).Scan(&tokenExists); err != nil {
 		t.Fatalf("query daemon_token: %v", err)
 	}
-	if tokenExists {
-		t.Fatal("daemon_token row was not deleted")
+	if !tokenExists {
+		t.Fatal("member removal must not delete another user's runtime daemon token")
 	}
 }
 
-// TestDeleteMember_RevokesTargetRuntimes verifies that when an admin removes
-// another member from a workspace, every runtime owned by the removed member
-// has its agents archived, its in-flight tasks cancelled, its row flipped
-// offline, and its daemon_token rows deleted — all atomically with the member
-// row deletion.
-func TestDeleteMember_RevokesTargetRuntimes(t *testing.T) {
+// TestDeleteMember_RevokesWorkspaceStateWithoutMutatingTargetRuntimes verifies
+// that removing a member archives workspace-owned agents and cancels tasks,
+// while preserving the removed member's private runtime row and daemon token.
+func TestDeleteMember_RevokesWorkspaceStateWithoutMutatingTargetRuntimes(t *testing.T) {
 	fx := setupRevocationFixture(t, "handler-tests-revoke-kick", "daemon-revoke-kick")
 
 	w := httptest.NewRecorder()
@@ -593,13 +592,13 @@ func TestDeleteMember_RevokesTargetRuntimes(t *testing.T) {
 		t.Fatalf("DeleteMember: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 
-	assertRevoked(t, fx)
+	assertWorkspaceStateRevoked(t, fx)
 }
 
-// TestLeaveWorkspace_RevokesOwnRuntimes is the self-removal counterpart: when
-// a member leaves a workspace voluntarily, their own runtimes are revoked
-// with the same atomic write set as DeleteMember.
-func TestLeaveWorkspace_RevokesOwnRuntimes(t *testing.T) {
+// TestLeaveWorkspace_RevokesWorkspaceStateWithoutMutatingOwnRuntimes is the
+// self-removal counterpart: leaving clears workspace-owned agent/task state
+// while preserving the user's own runtime row and daemon token.
+func TestLeaveWorkspace_RevokesWorkspaceStateWithoutMutatingOwnRuntimes(t *testing.T) {
 	fx := setupRevocationFixture(t, "handler-tests-revoke-leave", "daemon-revoke-leave")
 
 	// Re-target the request from the leaving member's perspective: the
@@ -615,7 +614,7 @@ func TestLeaveWorkspace_RevokesOwnRuntimes(t *testing.T) {
 		t.Fatalf("LeaveWorkspace: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 
-	assertRevoked(t, fx)
+	assertWorkspaceStateRevoked(t, fx)
 }
 
 // TestDeleteMember_CancelsTasksFromAgentReassignment covers a subtle
@@ -667,7 +666,7 @@ RETURNING id
 		t.Fatalf("DeleteMember: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 
-	assertRevoked(t, fx)
+	assertWorkspaceStateRevoked(t, fx)
 
 	// The orphan task — same agent, different runtime — must also be
 	// cancelled. Without the by-agent leg in CancelAgentTasksByRuntimeOrAgent

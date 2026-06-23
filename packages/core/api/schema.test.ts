@@ -91,6 +91,300 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
+  describe("agents", () => {
+    it("listAgents falls back to [] when the response is malformed", async () => {
+      stubFetchJson({ agents: "not-an-array" });
+      const client = new ApiClient("https://api.example.test");
+      const agents = await client.listAgents();
+      expect(agents).toEqual([]);
+    });
+
+    it("getAgent redacts legacy runtime_id and tolerates malformed runtime fields", async () => {
+      stubFetchJson({
+        id: "agent-1",
+        workspace_id: "workspace-1",
+        runtime_id: "runtime-private",
+        runtime_provider: 42,
+        runtime_profile_id: null,
+        name: "Agent",
+        description: "",
+        instructions: "",
+        avatar_url: null,
+        runtime_mode: "local",
+        runtime_config: {},
+        custom_args: [],
+        visibility: "workspace",
+        status: "idle",
+        max_concurrent_tasks: 1,
+        model: "",
+        owner_id: null,
+        skills: [],
+        created_at: "2026-06-20T00:00:00Z",
+        updated_at: "2026-06-20T00:00:00Z",
+        archived_at: null,
+        archived_by: null,
+      });
+      const client = new ApiClient("https://api.example.test");
+      const agent = await client.getAgent("agent-1");
+      expect(agent.id).toBe("agent-1");
+      expect(agent.runtime_id).toBeNull();
+      expect(agent.runtime_provider).toBe("codex");
+      expect(agent.runtime_profile_id).toBeNull();
+    });
+  });
+
+  describe("listRuntimes", () => {
+    it("falls back to [] when the response is malformed", async () => {
+      stubFetchJson({ runtimes: "not-an-array" });
+      const client = new ApiClient("https://api.example.test");
+      const runtimes = await client.listRuntimes({ owner: "me" });
+      expect(runtimes).toEqual([]);
+    });
+
+    it("defaults malformed runtime metadata to a safe owner-only shape", async () => {
+      stubFetchJson([
+        {
+          id: "runtime-1",
+          workspace_id: "workspace-1",
+          daemon_id: null,
+          name: "Runtime",
+          runtime_mode: 123,
+          provider: "codex",
+          launch_header: null,
+          status: "online",
+          device_info: 42,
+          metadata: "not-an-object",
+          owner_id: null,
+          visibility: "public",
+          profile_id: 99,
+          last_seen_at: null,
+          created_at: "2026-06-20T00:00:00Z",
+          updated_at: "2026-06-20T00:00:00Z",
+        },
+      ]);
+      const client = new ApiClient("https://api.example.test");
+      const runtimes = await client.listRuntimes({ owner: "me" });
+      expect(runtimes).toHaveLength(1);
+      expect(runtimes[0]?.runtime_mode).toBe("local");
+      expect(runtimes[0]?.launch_header).toBe("");
+      expect(runtimes[0]?.device_info).toBe("");
+      expect(runtimes[0]?.metadata).toEqual({});
+      expect(runtimes[0]?.profile_id).toBeNull();
+    });
+  });
+
+  describe("agent task audit responses", () => {
+    it("redacts runtime_id from workspace task snapshots", async () => {
+      stubFetchJson([
+        {
+          id: "task-1",
+          agent_id: "agent-1",
+          runtime_id: "runtime-private",
+          connection_credentials: { token: "secret" },
+          daemon_operation: { runtime_id: "runtime-private" },
+          runtime_detail_url: "/api/runtimes/runtime-private",
+          issue_id: "issue-1",
+          status: "running",
+          priority: 0,
+          dispatched_at: null,
+          started_at: null,
+          completed_at: null,
+          result: null,
+          error: null,
+          created_at: "2026-06-20T00:00:00Z",
+        },
+      ]);
+      const client = new ApiClient("https://api.example.test");
+      const tasks = await client.getAgentTaskSnapshot();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]?.runtime_id).toBe("");
+      expect(tasks[0]?.id).toBe("task-1");
+      expect(tasks[0]?.status).toBe("running");
+      const rawTask = tasks[0] as unknown as Record<string, unknown>;
+      expect("connection_credentials" in rawTask).toBe(false);
+      expect("daemon_operation" in rawTask).toBe(false);
+      expect("runtime_detail_url" in rawTask).toBe(false);
+    });
+
+    it("redacts runtime fields from issue task history", async () => {
+      stubFetchJson([
+        {
+          id: "task-1",
+          agent_id: "agent-1",
+          runtime_id: "runtime-private",
+          connection_credentials: { token: "secret" },
+          daemon_operation: { runtime_id: "runtime-private" },
+          runtime_selector_option: { id: "runtime-private" },
+          issue_id: "issue-1",
+          status: "completed",
+          priority: 0,
+          dispatched_at: null,
+          started_at: null,
+          completed_at: "2026-06-20T00:00:00Z",
+          result: null,
+          error: null,
+          created_at: "2026-06-20T00:00:00Z",
+        },
+      ]);
+      const client = new ApiClient("https://api.example.test");
+      const tasks = await client.listTasksByIssue("issue-1");
+      expect(tasks[0]?.runtime_id).toBe("");
+      const rawTask = tasks[0] as unknown as Record<string, unknown>;
+      expect("connection_credentials" in rawTask).toBe(false);
+      expect("daemon_operation" in rawTask).toBe(false);
+      expect("runtime_selector_option" in rawTask).toBe(false);
+    });
+
+    it("redacts nested runtime fields from task audit results", async () => {
+      stubFetchJson([
+        {
+          id: "task-1",
+          agent_id: "agent-1",
+          runtime_id: "runtime-private",
+          issue_id: "issue-1",
+          status: "completed",
+          priority: 0,
+          dispatched_at: null,
+          started_at: null,
+          completed_at: "2026-06-20T00:00:00Z",
+          result: {
+            summary: "finished",
+            runtime_id: "runtime-private",
+            runtimeId: "runtime-private",
+            runtime_detail_url: "/api/runtimes/runtime-private",
+            workDir: "/Users/alice/.multica/workspaces/ws/task/workdir",
+            connectionCredentials: { token: "secret" },
+            steps: [
+              { name: "safe" },
+              {
+                name: "unsafe",
+                daemon_operation_params: { runtime_id: "runtime-private" },
+                daemonOperationParams: { runtimeId: "runtime-private" },
+              },
+            ],
+          },
+          error: null,
+          created_at: "2026-06-20T00:00:00Z",
+          work_dir: "/Users/alice/.multica/workspaces/ws/task/workdir",
+          prior_work_dir: "/Users/alice/.multica/workspaces/ws/old/workdir",
+          relative_work_dir: "ws/task/workdir",
+        },
+      ]);
+      const client = new ApiClient("https://api.example.test");
+      const tasks = await client.listTasksByIssue("issue-1");
+      const rawTask = tasks[0] as unknown as Record<string, unknown>;
+      expect("work_dir" in rawTask).toBe(false);
+      expect("prior_work_dir" in rawTask).toBe(false);
+      expect(tasks[0]?.relative_work_dir).toBe("ws/task/workdir");
+      const result = tasks[0]?.result as Record<string, unknown>;
+      expect(result.summary).toBe("finished");
+      expect("runtime_id" in result).toBe(false);
+      expect("runtimeId" in result).toBe(false);
+      expect("runtime_detail_url" in result).toBe(false);
+      expect("workDir" in result).toBe(false);
+      expect("connectionCredentials" in result).toBe(false);
+      const steps = result.steps as Array<Record<string, unknown>>;
+      expect(steps[0]?.name).toBe("safe");
+      expect(steps[1]?.name).toBe("unsafe");
+      expect("daemon_operation_params" in steps[1]!).toBe(false);
+      expect("daemonOperationParams" in steps[1]!).toBe(false);
+    });
+
+    it("redacts runtime fields from issue task cancellation responses", async () => {
+      stubFetchJson({
+        id: "task-1",
+        agent_id: "agent-1",
+        runtime_id: "runtime-private",
+        connection_credentials: { token: "secret" },
+        daemon_operation: { runtime_id: "runtime-private" },
+        runtime_detail_url: "/api/runtimes/runtime-private",
+        issue_id: "issue-1",
+        status: "cancelled",
+        priority: 0,
+        dispatched_at: null,
+        started_at: null,
+        completed_at: null,
+        result: null,
+        error: null,
+        created_at: "2026-06-20T00:00:00Z",
+      });
+      const client = new ApiClient("https://api.example.test");
+      const task = await client.cancelTask("issue-1", "task-1");
+      expect(task.runtime_id).toBe("");
+      const rawTask = task as unknown as Record<string, unknown>;
+      expect("connection_credentials" in rawTask).toBe(false);
+      expect("daemon_operation" in rawTask).toBe(false);
+      expect("runtime_detail_url" in rawTask).toBe(false);
+    });
+
+    it("redacts runtime fields from rerun responses", async () => {
+      stubFetchJson({
+        id: "task-2",
+        agent_id: "agent-1",
+        runtime_id: "runtime-private",
+        connection_credentials: { token: "secret" },
+        daemon_operation_params: { runtime_id: "runtime-private" },
+        runtime_call_url: "/api/daemon/runtimes/runtime-private/tasks/claim",
+        issue_id: "issue-1",
+        status: "queued",
+        priority: 0,
+        dispatched_at: null,
+        started_at: null,
+        completed_at: null,
+        result: null,
+        error: null,
+        created_at: "2026-06-20T00:00:00Z",
+      });
+      const client = new ApiClient("https://api.example.test");
+      const task = await client.rerunIssue("issue-1", "task-1");
+      expect(task.runtime_id).toBe("");
+      const rawTask = task as unknown as Record<string, unknown>;
+      expect("connection_credentials" in rawTask).toBe(false);
+      expect("daemon_operation_params" in rawTask).toBe(false);
+      expect("runtime_call_url" in rawTask).toBe(false);
+    });
+
+    it("redacts runtime invocation fields from task message inputs", async () => {
+      stubFetchJson([
+        {
+          task_id: "task-1",
+          issue_id: "issue-1",
+          seq: 1,
+          type: "tool_use",
+          input: {
+            path: "README.md",
+            runtime_id: "runtime-private",
+            connection_credentials: { token: "secret" },
+            daemon_operation: { claim: true },
+            runtime_call_url: "/api/daemon/runtimes/runtime-private/tasks/claim",
+            nested: {
+              keep: "safe",
+              runtime_id: "runtime-private",
+            },
+          },
+        },
+      ]);
+      const client = new ApiClient("https://api.example.test");
+      const messages = await client.listTaskMessages("task-1");
+      const input = messages[0]?.input ?? {};
+      expect(input.path).toBe("README.md");
+      expect("runtime_id" in input).toBe(false);
+      expect("connection_credentials" in input).toBe(false);
+      expect("daemon_operation" in input).toBe(false);
+      expect("runtime_call_url" in input).toBe(false);
+      const nested = input.nested as Record<string, unknown>;
+      expect(nested.keep).toBe("safe");
+      expect("runtime_id" in nested).toBe(false);
+    });
+
+    it("falls back to [] when workspace task snapshot is malformed", async () => {
+      stubFetchJson({ tasks: "not-an-array" });
+      const client = new ApiClient("https://api.example.test");
+      const tasks = await client.getAgentTaskSnapshot();
+      expect(tasks).toEqual([]);
+    });
+  });
+
   describe("listAutopilots", () => {
     const baseAutopilot = {
       id: "ap-1",

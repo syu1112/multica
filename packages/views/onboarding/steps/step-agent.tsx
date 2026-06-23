@@ -108,7 +108,8 @@ export function StepAgent({
         name: template.defaultName,
         description: template.blurb,
         instructions: template.instructions,
-        runtime_id: runtime.id,
+        runtime_provider: runtime.provider,
+        runtime_profile_id: runtime.profile_id ?? null,
         visibility: "workspace",
         template: templateId,
       };

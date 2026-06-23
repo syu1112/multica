@@ -453,8 +453,9 @@ func createClaudeProviderRuntime(t *testing.T) string {
 	return runtimeID
 }
 
-// createAgentOnRuntime seeds an agent row bound to the given runtime
-// with the given initial thinking_level (empty for NULL).
+// createAgentOnRuntime seeds an agent row with the given runtime's provider
+// capability and initial thinking_level (empty for NULL). runtime_id remains
+// populated only to exercise legacy compatibility paths.
 func createAgentOnRuntime(t *testing.T, name, runtimeID, level string) string {
 	t.Helper()
 	var agentID string
@@ -467,10 +468,12 @@ func createAgentOnRuntime(t *testing.T, name, runtimeID, level string) string {
 	err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			runtime_id, runtime_provider, visibility, max_concurrent_tasks, owner_id,
 			instructions, custom_env, custom_args, thinking_level
 		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5)
+		SELECT $1, $2, '', ar.runtime_mode, '{}'::jsonb, ar.id, ar.provider, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5
+		  FROM agent_runtime ar
+		 WHERE ar.id = $3
 		RETURNING id
 	`, testWorkspaceID, name, runtimeID, testUserID, levelArg).Scan(&agentID)
 	if err != nil {
@@ -488,10 +491,12 @@ func createAgentOnRuntimeWithModel(t *testing.T, name, runtimeID, model string) 
 	err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			runtime_id, runtime_provider, visibility, max_concurrent_tasks, owner_id,
 			instructions, custom_env, custom_args, model
 		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5)
+		SELECT $1, $2, '', ar.runtime_mode, '{}'::jsonb, ar.id, ar.provider, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5
+		  FROM agent_runtime ar
+		 WHERE ar.id = $3
 		RETURNING id
 	`, testWorkspaceID, name, runtimeID, testUserID, model).Scan(&agentID)
 	if err != nil {

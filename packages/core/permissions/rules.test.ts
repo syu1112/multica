@@ -27,6 +27,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     instructions: "",
     avatar_url: null,
     runtime_mode: "local",
+    runtime_provider: "claude",
+    runtime_profile_id: null,
     runtime_config: {},
     custom_args: [],
     visibility: "workspace",
@@ -254,13 +256,13 @@ describe("canDeleteRuntime", () => {
     expect(canDeleteRuntime(r, { userId: ALICE, role: "member" }).allowed)
       .toBe(true);
   });
-  it("allows workspace admin", () => {
+  it("denies workspace admin when they do not own the runtime", () => {
     const r = makeRuntime(ALICE);
     expect(canDeleteRuntime(r, { userId: BOB, role: "admin" }).allowed).toBe(
-      true,
+      false,
     );
   });
-  it("denies non-owner non-admin", () => {
+  it("denies non-owner member", () => {
     const r = makeRuntime(ALICE);
     expect(canDeleteRuntime(r, { userId: BOB, role: "member" }).allowed)
       .toBe(false);

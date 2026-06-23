@@ -24,6 +24,7 @@ import {
   readRuntimeCliVersion,
   MIN_QUICK_CREATE_CLI_VERSION,
 } from "@multica/core/runtimes";
+import { firstCompatibleRuntimeForAgent } from "@multica/core/agents";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { formatShortcut, modKey, enterKey } from "@multica/core/platform";
 import { contentReferencesAttachment, type Agent, type Attachment, type Squad } from "@multica/core/types";
@@ -234,17 +235,41 @@ export function AgentCreatePanel({
   // — frontend and server share the same signal there, so they agree by
   // construction across web/desktop/staging without comparing env flags.
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
+  const compatibleRuntimes = useMemo(
+    () =>
+      selectedAgent
+        ? runtimes.filter(
+            (runtime) =>
+              firstCompatibleRuntimeForAgent(selectedAgent, [runtime], {
+                ownerId: userId ?? null,
+                onlineOnly: true,
+              }) !== null,
+          )
+        : [],
+    [runtimes, selectedAgent, userId],
+  );
+  const [selectedRuntimeId, setSelectedRuntimeId] = useState<string>("");
+  useEffect(() => {
+    if (!selectedAgent) {
+      if (selectedRuntimeId) setSelectedRuntimeId("");
+      return;
+    }
+    if (selectedRuntimeId && compatibleRuntimes.some((runtime) => runtime.id === selectedRuntimeId)) {
+      return;
+    }
+    setSelectedRuntimeId(compatibleRuntimes[0]?.id ?? "");
+  }, [compatibleRuntimes, selectedAgent, selectedRuntimeId]);
   const selectedRuntime = useMemo(
     () =>
-      selectedAgent?.runtime_id
-        ? runtimes.find((r) => r.id === selectedAgent.runtime_id)
-        : undefined,
-    [runtimes, selectedAgent?.runtime_id],
+      compatibleRuntimes.find((runtime) => runtime.id === selectedRuntimeId) ??
+      compatibleRuntimes[0],
+    [compatibleRuntimes, selectedRuntimeId],
   );
   const versionCheck = useMemo(
     () => checkQuickCreateCliVersion(readRuntimeCliVersion(selectedRuntime?.metadata)),
     [selectedRuntime?.metadata],
   );
+  const runtimeBlocked = Boolean(selectedAgent && !selectedRuntime);
   const versionBlocked = versionCheck.state !== "ok";
 
   const initialPrompt = (data?.prompt as string) || promptDraft;
@@ -286,7 +311,7 @@ export function AgentCreatePanel({
 
   const submit = async () => {
     const md = editorRef.current?.getMarkdown()?.trim() ?? "";
-    if (!md || !actor || submitting || versionBlocked || uploading) return;
+    if (!md || !actor || submitting || runtimeBlocked || versionBlocked || uploading) return;
     const activeAttachmentIds = pendingAttachments
       .filter((a) => contentReferencesAttachment(md, a))
       .map((a) => a.id);
@@ -297,6 +322,7 @@ export function AgentCreatePanel({
         ...(actor.type === "agent"
           ? { agent_id: actor.id }
           : { squad_id: actor.id }),
+        runtime_id: selectedRuntime?.id,
         prompt: md,
         project_id: projectId ?? undefined,
         parent_issue_id: parentIssueId,
@@ -511,6 +537,20 @@ export function AgentCreatePanel({
             triggerRender={<PillButton />}
             align="start"
           />
+          {selectedAgent && compatibleRuntimes.length > 1 && (
+            <select
+              aria-label={t(($) => $.create_issue.agent.runtime_label)}
+              value={selectedRuntime?.id ?? ""}
+              onChange={(event) => setSelectedRuntimeId(event.target.value)}
+              className="h-7 rounded-sm border border-border bg-background px-2 text-xs text-foreground"
+            >
+              {compatibleRuntimes.map((runtime) => (
+                <option key={runtime.id} value={runtime.id}>
+                  {runtime.name}
+                </option>
+              ))}
+            </select>
+          )}
           {parentIssueId && (
             <span
               data-testid="agent-sub-issue-chip"
@@ -561,9 +601,11 @@ export function AgentCreatePanel({
             <Button
               size="sm"
               onClick={submit}
-              disabled={!hasContent || !actor || submitting || versionBlocked || uploading}
+              disabled={!hasContent || !actor || submitting || runtimeBlocked || versionBlocked || uploading}
               title={
-                versionBlocked
+                runtimeBlocked
+                  ? t(($) => $.create_issue.agent.runtime_blocked_tooltip)
+                  : versionBlocked
                   ? t(($) => $.create_issue.agent.version_blocked_tooltip, { min: versionCheck.min })
                   : undefined
               }

@@ -30,6 +30,7 @@ import type {
   TaskQueuedPayload,
   TaskDispatchPayload,
 } from "@multica/core/types";
+import { TaskMessagePayloadSchema } from "@/data/schemas";
 import { chatKeys } from "@/data/queries/chat";
 
 // =====================================================
@@ -199,11 +200,12 @@ export function appendTaskMessage(
   qc: QueryClient,
   payload: TaskMessagePayload,
 ) {
+  const safePayload = TaskMessagePayloadSchema.parse(payload);
   qc.setQueryData<TaskMessagePayload[]>(
-    chatKeys.taskMessages(payload.task_id),
+    chatKeys.taskMessages(safePayload.task_id),
     (old = []) => {
-      if (old.some((m) => m.seq === payload.seq)) return old;
-      return [...old, payload].sort((a, b) => a.seq - b.seq);
+      if (old.some((m) => m.seq === safePayload.seq)) return old;
+      return [...old, safePayload].sort((a, b) => a.seq - b.seq);
     },
   );
 }

@@ -4,12 +4,10 @@ export type AgentRuntimeMode = "local" | "cloud";
 
 export type AgentVisibility = "workspace" | "private";
 
-// Runtime visibility is a separate axis from agent visibility — different
-// vocabulary because it gates a different action. "private" (default) means
-// only the runtime owner and workspace admins can bind agents to it;
-// "public" opens binding to any workspace member. Older backends that
-// haven't shipped MUL-2062 omit the field; the consumer must default to
-// "private" so the strictest behavior is the fallback.
+// Runtime visibility is retained for compatibility, but local runtime
+// invocation and selection are owner-only. "public" must not be treated as
+// permission for another member, including workspace owner/admin, to call the
+// runtime.
 export type RuntimeVisibility = "private" | "public";
 
 export interface RuntimeDevice {
@@ -149,6 +147,11 @@ export interface AgentRunCount {
 export interface AgentTask {
   id: string;
   agent_id: string;
+  /**
+   * Empty in user-visible audit/history responses. Concrete runtime IDs are
+   * daemon-routing details and must not be used as a runtime visibility or
+   * invocation affordance in UI code.
+   */
   runtime_id: string;
   // Empty string ("") when the task has no linked issue — either chat- or
   // autopilot-spawned. Check chat_session_id / autopilot_run_id to tell
@@ -204,9 +207,9 @@ export interface AgentTask {
   kind?: "comment" | "autopilot" | "chat" | "quick_create" | "direct";
   /**
    * Local working directory pinned for this task by the daemon. Empty until
-   * the daemon reports a work_dir (typically once execution starts). This is
-   * the canonical absolute path the agent runs in; UI surfaces should prefer
-   * `relative_work_dir` to avoid leaking the user's home directory.
+   * the daemon reports a work_dir (typically once execution starts). User-side
+   * audit APIs and schemas redact this absolute path; UI surfaces must use
+   * `relative_work_dir` instead.
    */
   work_dir?: string;
   /**
@@ -227,7 +230,13 @@ export interface AgentTask {
 export interface Agent {
   id: string;
   workspace_id: string;
-  runtime_id: string;
+  /**
+   * Legacy compatibility field. New agents no longer bind to a concrete
+   * runtime; task creation resolves a requester-owned runtime dynamically.
+   */
+  runtime_id: string | null;
+  runtime_provider: string;
+  runtime_profile_id: string | null;
   name: string;
   description: string;
   instructions: string;
@@ -316,7 +325,10 @@ export interface CreateAgentRequest {
   description?: string;
   instructions?: string;
   avatar_url?: string;
-  runtime_id: string;
+  /** Compatibility only: server converts this to provider/profile capability. */
+  runtime_id?: string;
+  runtime_provider?: string;
+  runtime_profile_id?: string | null;
   runtime_config?: Record<string, unknown>;
   custom_env?: Record<string, string>;
   custom_args?: string[];
@@ -368,7 +380,10 @@ export interface AgentTemplateSkillRef {
 export interface CreateAgentFromTemplateRequest {
   template_slug: string;
   name: string;
-  runtime_id: string;
+  /** Compatibility only: server converts this to provider/profile capability. */
+  runtime_id?: string;
+  runtime_provider?: string;
+  runtime_profile_id?: string | null;
   model?: string;
   visibility?: AgentVisibility;
   max_concurrent_tasks?: number;
@@ -405,7 +420,10 @@ export interface UpdateAgentRequest {
   description?: string;
   instructions?: string;
   avatar_url?: string;
+  /** Compatibility only: server converts this to provider/profile capability. */
   runtime_id?: string;
+  runtime_provider?: string;
+  runtime_profile_id?: string | null;
   runtime_config?: Record<string, unknown>;
   /**
    * NOTE: `custom_env` is intentionally NOT updatable through this

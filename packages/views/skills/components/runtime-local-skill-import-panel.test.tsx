@@ -16,6 +16,13 @@ const mockResolveRuntimeLocalSkillImport = vi.hoisted(() => vi.fn());
 const mockRuntimeListOptions = vi.hoisted(() => vi.fn());
 const mockRuntimeLocalSkillsOptions = vi.hoisted(() => vi.fn());
 const mockListMembers = vi.hoisted(() => vi.fn());
+const mockAuthUser = vi.hoisted(() => ({
+  current: { id: "user-1", email: "u@example.com", name: "User" } as {
+    id: string;
+    email: string;
+    name: string;
+  } | null,
+}));
 
 vi.mock("@multica/core/api", () => ({
   api: {
@@ -28,9 +35,10 @@ vi.mock("@multica/core/hooks", () => ({
 }));
 
 vi.mock("@multica/core/auth", () => {
-  const stateUser = { id: "user-1", email: "u@example.com", name: "User" };
-  const useAuthStore = (selector?: (s: { user: typeof stateUser }) => unknown) => {
-    const state = { user: stateUser };
+  const useAuthStore = (
+    selector?: (s: { user: typeof mockAuthUser.current }) => unknown,
+  ) => {
+    const state = { user: mockAuthUser.current };
     return selector ? selector(state) : state;
   };
   return { useAuthStore };
@@ -79,6 +87,14 @@ const MOCK_RUNTIME = {
   last_seen_at: null,
   created_at: "2026-04-16T00:00:00Z",
   updated_at: "2026-04-16T00:00:00Z",
+};
+
+const MOCK_RUNTIME_USER_2 = {
+  ...MOCK_RUNTIME,
+  id: "runtime-2",
+  daemon_id: "daemon-2",
+  name: "Claude (ThinkPad)",
+  owner_id: "user-2",
 };
 
 const MOCK_SKILL_A = {
@@ -141,6 +157,7 @@ function renderPanel(props: { onImported?: (skill: unknown) => void; onBulkDone?
 describe("RuntimeLocalSkillImportPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAuthUser.current = { id: "user-1", email: "u@example.com", name: "User" };
 
     mockRuntimeListOptions.mockReturnValue({
       queryKey: ["runtimes", "ws-1", "list"],
@@ -162,6 +179,55 @@ describe("RuntimeLocalSkillImportPanel", () => {
       { user_id: "user-1", name: "Alice", email: "alice@example.com" },
       { user_id: "user-2", name: "Bob", email: "bob@example.com" },
     ]);
+  });
+
+  it("does not expose local runtimes while the current user is unknown", async () => {
+    mockAuthUser.current = null;
+
+    renderPanel();
+
+    expect(
+      await screen.findByText("No local runtimes available", {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Review Helper")).not.toBeInTheDocument();
+    expect(mockRuntimeLocalSkillsOptions).not.toHaveBeenCalledWith("runtime-1");
+  });
+
+  it("switches away from a stale runtime id when the current user changes", async () => {
+    mockRuntimeListOptions.mockReturnValue({
+      queryKey: ["runtimes", "ws-1", "list"],
+      queryFn: () => Promise.resolve([MOCK_RUNTIME, MOCK_RUNTIME_USER_2]),
+    });
+    mockRuntimeLocalSkillsOptions.mockImplementation((runtimeId: string | null) => ({
+      queryKey: ["runtimes", "local-skills", runtimeId],
+      queryFn: () =>
+        Promise.resolve({
+          supported: true,
+          skills:
+            runtimeId === "runtime-2"
+              ? [{ ...MOCK_SKILL_A, key: "user-2-skill", name: "User 2 Skill" }]
+              : [MOCK_SKILL_A],
+        }),
+    }));
+
+    const view = renderPanel();
+    expect(
+      await screen.findByText("Review Helper", {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+
+    mockAuthUser.current = { id: "user-2", email: "u2@example.com", name: "User 2" };
+    view.rerender(
+      <I18nWrapper>
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <RuntimeLocalSkillImportPanel />
+        </QueryClientProvider>
+      </I18nWrapper>,
+    );
+
+    expect(
+      await screen.findByText("User 2 Skill", {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(mockRuntimeLocalSkillsOptions).toHaveBeenCalledWith("runtime-2");
   });
 
   it("imports a single skill when selected via checkbox", async () => {

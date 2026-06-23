@@ -92,15 +92,10 @@ const (
 	OutcomeIngested Outcome = "ingested"
 
 	// OutcomeAgentOffline — the message landed in chat_session, but
-	// the agent has no runtime bound at all (agent.runtime_id IS
-	// NULL). The adapter should reply with "agent offline, will run
-	// on next online." The chat_message row remains so the agent
-	// picks it up on resume.
-	//
-	// IMPORTANT: this is NOT triggered when a daemon is merely
-	// disconnected. If agent.runtime_id IS set, the chat task is
-	// enqueued and waits for the daemon to claim it on next online;
-	// that path returns OutcomeIngested with a TaskID.
+	// the agent cannot be routed for this sender: either the agent has
+	// no runtime capability, or the sender has no compatible online
+	// local runtime. The adapter should reply with a productizable
+	// remediation rather than retrying against another user's runtime.
 	OutcomeAgentOffline Outcome = "agent_offline"
 
 	// OutcomeAgentArchived — the message landed in chat_session, but
@@ -549,9 +544,9 @@ func (d *Dispatcher) processClaimed(ctx context.Context, msg InboundMessage, ins
 	//    offline / archived) and infra errors are now handled inside the
 	//    flush (see flushChatRun), not returned here.
 	//
-	//    Note: a daemon that's merely disconnected is NOT an error. As
-	//    long as agent.runtime_id is set, the chat task is enqueued at
-	//    flush and waits for the daemon to claim it on next online.
+	//    Note: a daemon that's merely disconnected is handled at flush by the
+	//    runtime resolver. Chat restores an existing session runtime when it
+	//    can, otherwise it resolves a compatible runtime for the sender.
 	// binding.MulticaUserID is THIS message's sender — the task initiator. It is
 	// deliberately not the session creator (group sessions are creator=installer,
 	// see step 5). The debouncer keeps the latest scheduled flush per session, so
@@ -710,7 +705,9 @@ func (d *Dispatcher) createIssueFromCommand(
 		OriginType:   pgtype.Text{String: originLarkChat, Valid: true},
 		OriginID:     sessionID,
 	}
-	return d.IssueService.Create(ctx, params, service.IssueCreateOpts{})
+	return d.IssueService.Create(ctx, params, service.IssueCreateOpts{
+		RequesterID: creatorUserID,
+	})
 }
 
 // originLarkChat is the issue.origin_type label written for issues

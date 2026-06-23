@@ -13,8 +13,6 @@ import {
 import { Label } from "@multica/ui/components/ui/label";
 import { useT } from "../../i18n";
 
-export type RuntimeFilter = "mine" | "all";
-
 export function RuntimePicker({
   runtimes,
   runtimesLoading,
@@ -32,22 +30,19 @@ export function RuntimePicker({
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState<RuntimeFilter>("mine");
 
   const getOwnerMember = (ownerId: string | null) => {
     if (!ownerId) return null;
     return members.find((m) => m.user_id === ownerId) ?? null;
   };
 
-  const hasOtherRuntimes = runtimes.some((r) => r.owner_id !== currentUserId);
-
   const filteredRuntimes = useMemo(
-    () => computeFilteredRuntimes(runtimes, filter, currentUserId),
-    [runtimes, filter, currentUserId],
+    () => computeFilteredRuntimes(runtimes, currentUserId),
+    [runtimes, currentUserId],
   );
 
   const selectedRuntime =
-    runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
+    filteredRuntimes.find((d) => d.id === selectedRuntimeId) ?? null;
 
   // Sole source of truth for seeding the parent's selection when it's empty
   // — first mount with no template runtime, runtimes arriving later over
@@ -62,55 +57,16 @@ export function RuntimePicker({
     if (firstUsable) onSelect(firstUsable.id);
   }, [filteredRuntimes, selectedRuntimeId, currentUserId, onSelect]);
 
-  // On filter toggle, recompute the picker's selection to a usable item
-  // in the new filter set. Pushes `""` when nothing matches; the seeding
-  // effect above is a no-op in that case (correct: no usable item to pick).
-  const handleFilterChange = (next: RuntimeFilter) => {
-    if (next === filter) return;
-    setFilter(next);
-    const nextList = computeFilteredRuntimes(runtimes, next, currentUserId);
-    const firstUsable = nextList.find((r) =>
-      isRuntimeUsableForUser(r, currentUserId),
-    );
-    onSelect(firstUsable?.id ?? "");
-  };
-
   return (
     <div className="flex flex-col min-w-0">
       <div className="flex h-6 items-center justify-between">
         <Label className="text-xs text-muted-foreground">
           {t(($) => $.create_dialog.runtime_label)}
         </Label>
-        {hasOtherRuntimes && (
-          <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-            <button
-              type="button"
-              onClick={() => handleFilterChange("mine")}
-              className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-                filter === "mine"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t(($) => $.create_dialog.runtime_filter_mine)}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleFilterChange("all")}
-              className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-                filter === "all"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t(($) => $.create_dialog.runtime_filter_all)}
-            </button>
-          </div>
-        )}
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          disabled={runtimes.length === 0 && !runtimesLoading}
+          disabled={filteredRuntimes.length === 0 && !runtimesLoading}
           className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
         >
           {runtimesLoading ? (
@@ -235,29 +191,22 @@ export function isRuntimeUsableForUser(
   r: RuntimeDevice,
   currentUserId: string | null,
 ): boolean {
-  if (!currentUserId) return true;
-  if (r.owner_id === currentUserId) return true;
-  return r.visibility === "public";
+  if (!currentUserId) return false;
+  return r.owner_id === currentUserId;
 }
 
 function computeFilteredRuntimes(
   runtimes: RuntimeDevice[],
-  filter: RuntimeFilter,
   currentUserId: string | null,
 ): RuntimeDevice[] {
-  const filtered =
-    filter === "mine" && currentUserId
-      ? runtimes.filter((r) => r.owner_id === currentUserId)
-      : runtimes;
+  const filtered = currentUserId
+    ? runtimes.filter((r) => r.owner_id === currentUserId)
+    : [];
   return filtered.toSorted((a, b) => {
     const aMine = a.owner_id === currentUserId;
     const bMine = b.owner_id === currentUserId;
     if (aMine && !bMine) return -1;
     if (!aMine && bMine) return 1;
-    const aUsable = isRuntimeUsableForUser(a, currentUserId);
-    const bUsable = isRuntimeUsableForUser(b, currentUserId);
-    if (aUsable && !bUsable) return -1;
-    if (!aUsable && bUsable) return 1;
     return 0;
   });
 }

@@ -238,7 +238,6 @@ export interface TaskDispatchPayload {
   task_id: string;
   agent_id: string;
   issue_id: string;
-  runtime_id: string;
   chat_session_id?: string;
 }
 

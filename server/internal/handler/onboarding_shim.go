@@ -35,6 +35,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -189,11 +190,11 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid runtime_id")
+		writeError(w, http.StatusNotFound, "invalid runtime_id")
 		return
 	}
 	if !canUseRuntimeForAgent(member, runtime) {
-		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
+		writeError(w, http.StatusNotFound, "invalid runtime_id")
 		return
 	}
 
@@ -220,7 +221,9 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			AvatarUrl:          pgtype.Text{String: onboardingAssistantAvatarURL, Valid: true},
 			RuntimeMode:        runtime.RuntimeMode,
 			RuntimeConfig:      []byte("{}"),
-			RuntimeID:          runtime.ID,
+			RuntimeID:          pgtype.UUID{},
+			RuntimeProvider:    runtime.Provider,
+			RuntimeProfileID:   runtime.ProfileID,
 			Visibility:         "workspace",
 			MaxConcurrentTasks: 6,
 			OwnerID:            parseUUID(userID),
@@ -236,6 +239,22 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		assistantCreated = true
+	}
+
+	if _, err := service.NewRuntimeResolver(qtx).Resolve(r.Context(), service.RuntimeResolveInput{
+		WorkspaceID:         wsUUID,
+		Agent:               assistant,
+		RequesterUserID:     parseUUID(userID),
+		ExplicitRuntimeID:   runtimeUUID,
+		AllowExplicitChoice: true,
+	}); err != nil {
+		slog.Warn("bootstrap onboarding (shim): runtime preflight failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID)...)
+		if reason, ok := runtimeResolveFailureReason(err); ok {
+			writeAgentUnavailable(w, reason)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to resolve onboarding runtime")
+		return
 	}
 
 	var emptyUUID pgtype.UUID
@@ -326,7 +345,15 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			platform,
 		))
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+			if _, err := h.TaskService.EnqueueTaskForIssueByRequester(r.Context(), issue, parseUUID(userID), runtime.ID); err != nil {
+				slog.Warn("bootstrap onboarding (shim): enqueue issue task failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID, "issue_id", uuidToString(issue.ID))...)
+				if reason, ok := runtimeResolveFailureReason(err); ok {
+					writeAgentUnavailable(w, reason)
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "failed to enqueue onboarding task")
+				return
+			}
 		}
 	}
 	if firstCompletion {

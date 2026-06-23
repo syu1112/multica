@@ -99,6 +99,12 @@ type IssueCreateOpts struct {
 	// daemon / lark / autopilot). Derived from middleware's client
 	// metadata at the handler layer.
 	Platform string
+
+	// RequesterID is the human user whose local runtime should execute an
+	// agent-assigned issue. SelectedRuntimeID is optional and, when present,
+	// is validated by TaskService as requester-owned and compatible.
+	RequesterID       pgtype.UUID
+	SelectedRuntimeID pgtype.UUID
 }
 
 // ErrActiveDuplicate signals that the duplicate guard found an active
@@ -145,7 +151,7 @@ type IssueCreateResult struct {
 //  8. Publish EventIssueCreated to the bus (payload via opts.BroadcastPayload).
 //  9. Capture the IssueCreated analytics event.
 //  10. Enqueue an agent task or trigger the squad leader when the issue is
-//      assigned and not in `backlog`.
+//     assigned and not in `backlog`.
 //
 // Validation that lives in the service (parent existence, project
 // workspace membership, parent → project back-fill) is enforced here so
@@ -154,6 +160,10 @@ type IssueCreateResult struct {
 // Caller-owned validation is limited to transport-shaped checks: title
 // required, RFC3339 date format, assignee pair sanity.
 func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts IssueCreateOpts) (IssueCreateResult, error) {
+	if err := s.preflightIssueRuntime(ctx, p, opts); err != nil {
+		return IssueCreateResult{}, err
+	}
+
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("begin tx: %w", err)
@@ -276,9 +286,50 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 
 	s.publishIssueCreated(issue, attachments, p.CreatorType, actorID, opts)
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
-	s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID)
+	s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.RequesterID, opts.SelectedRuntimeID)
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments}, nil
+}
+
+func (s *IssueService) preflightIssueRuntime(ctx context.Context, p IssueCreateParams, opts IssueCreateOpts) error {
+	if p.Status == "backlog" || !p.AssigneeType.Valid || !p.AssigneeID.Valid {
+		return nil
+	}
+	issue := db.Issue{
+		WorkspaceID:  p.WorkspaceID,
+		Status:       p.Status,
+		AssigneeType: p.AssigneeType,
+		AssigneeID:   p.AssigneeID,
+		CreatorType:  p.CreatorType,
+		CreatorID:    p.CreatorID,
+	}
+	var agentID pgtype.UUID
+	switch p.AssigneeType.String {
+	case "agent":
+		if !s.isAgentAssigneeReady(ctx, issue) {
+			return nil
+		}
+		agentID = p.AssigneeID
+	case "squad":
+		if !s.isSquadLeaderReady(ctx, issue) {
+			return nil
+		}
+		squad, err := s.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+			ID:          p.AssigneeID,
+			WorkspaceID: p.WorkspaceID,
+		})
+		if err != nil {
+			return nil
+		}
+		agentID = squad.LeaderID
+	default:
+		return nil
+	}
+	requesterID := opts.RequesterID
+	if _, err := s.TaskService.ResolveRuntimeForAgentByRequester(ctx, p.WorkspaceID, agentID, requesterID, opts.SelectedRuntimeID); err != nil {
+		return fmt.Errorf("resolve issue runtime: %w", err)
+	}
+	return nil
 }
 
 // linkAttachments links the given attachment IDs to the newly created
@@ -380,19 +431,19 @@ func classifyOrigin(issue db.Issue, opts IssueCreateOpts) (source, taskID, autop
 	}
 }
 
-func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string) {
+func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, requesterID pgtype.UUID, selectedRuntimeID pgtype.UUID) {
 	if !issue.AssigneeType.Valid || !issue.AssigneeID.Valid {
 		return
 	}
 	if s.shouldEnqueueAgentTask(ctx, issue) {
-		if _, err := s.TaskService.EnqueueTaskForIssue(ctx, issue); err != nil {
+		if _, err := s.TaskService.EnqueueTaskForIssueByRequester(ctx, issue, requesterID, selectedRuntimeID); err != nil {
 			slog.Warn("enqueue agent task on create failed",
 				"issue_id", util.UUIDToString(issue.ID),
 				"error", err)
 		}
 	}
 	if s.shouldEnqueueSquadLeaderOnAssign(ctx, issue) {
-		s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID)
+		s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID, selectedRuntimeID)
 	}
 }
 
@@ -413,10 +464,15 @@ func (s *IssueService) isAgentAssigneeReady(ctx context.Context, issue db.Issue)
 		return false
 	}
 	agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+	if err != nil || !agentHasRuntimeCapability(agent) || agent.ArchivedAt.Valid {
 		return false
 	}
 	return true
+}
+
+func agentHasRuntimeCapability(agent db.Agent) bool {
+	return agent.RuntimeProfileID.Valid ||
+		(agent.RuntimeProvider != "" && agent.RuntimeProvider != "legacy_local")
 }
 
 func (s *IssueService) shouldEnqueueSquadLeaderOnAssign(ctx context.Context, issue db.Issue) bool {
@@ -448,7 +504,7 @@ func (s *IssueService) isSquadLeaderReady(ctx context.Context, issue db.Issue) b
 	return ready
 }
 
-func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string) {
+func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string, selectedRuntimeID pgtype.UUID) {
 	squad, err := s.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 		ID:          issue.AssigneeID,
 		WorkspaceID: issue.WorkspaceID,
@@ -463,7 +519,21 @@ func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issu
 	if err != nil || hasPending {
 		return
 	}
-	if _, err := s.TaskService.EnqueueTaskForSquadLeader(ctx, issue, squad.LeaderID, triggerCommentID); err != nil {
+	var requesterID pgtype.UUID
+	if authorType == "member" {
+		var err error
+		requesterID, err = util.ParseUUID(authorID)
+		if err != nil {
+			slog.Warn("enqueue squad leader task skipped: invalid requester",
+				"issue_id", util.UUIDToString(issue.ID),
+				"squad_id", util.UUIDToString(squad.ID),
+				"leader_id", util.UUIDToString(squad.LeaderID),
+				"requester_id", authorID,
+				"error", err)
+			return
+		}
+	}
+	if _, err := s.TaskService.EnqueueTaskForSquadLeaderByRequesterWithRuntime(ctx, issue, squad.LeaderID, triggerCommentID, requesterID, selectedRuntimeID); err != nil {
 		slog.Warn("enqueue squad leader task on create failed",
 			"issue_id", util.UUIDToString(issue.ID),
 			"squad_id", util.UUIDToString(squad.ID),

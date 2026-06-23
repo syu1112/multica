@@ -18,6 +18,7 @@ import { useUpdatableRuntimeIds } from "@multica/core/runtimes/hooks";
 import { useWSEvent } from "@multica/core/realtime";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { memberListOptions } from "@multica/core/workspace/queries";
+import type { AgentRuntime } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import {
@@ -126,14 +127,15 @@ export function RuntimesPage({
   const isMobile = useIsMobile();
 
   const { data: runtimes = [], isLoading: fetching } = useQuery(
-    runtimeListOptions(wsId),
+    runtimeListOptions(wsId, "me"),
   );
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
 
-  // Custom runtime management is an admin-only affordance, gated the same
-  // way the runtime list gates delete: workspace owner/admin role.
+  // Custom runtime profiles are workspace definitions, not runtime instances;
+  // workspace owner/admin can manage them while concrete runtime devices stay
+  // visible and editable only to their owner.
   const currentMember = currentUserId
     ? members.find((m) => m.user_id === currentUserId)
     : null;
@@ -149,10 +151,15 @@ export function RuntimesPage({
   const updatableIds = useUpdatableRuntimeIds(wsId);
   const now = useNowTick();
 
+  const ownedRuntimes = useMemo(
+    () => filterOwnedRuntimes(runtimes, currentUserId),
+    [runtimes, currentUserId],
+  );
+
   useEffect(() => {
     if (pendingProfiles.length === 0) return;
     const registeredProfileIds = new Set(
-      runtimes
+      ownedRuntimes
         .map((runtime) => runtime.profile_id)
         .filter((profileId): profileId is string => !!profileId),
     );
@@ -163,13 +170,13 @@ export function RuntimesPage({
       );
       return next.length === current.length ? current : next;
     });
-  }, [pendingProfiles.length, runtimes]);
+  }, [pendingProfiles.length, ownedRuntimes]);
 
   const visibleRuntimes = useMemo(
     () =>
       pendingRuntimesForProfiles({
         pendingProfiles,
-        runtimes,
+        runtimes: ownedRuntimes,
         ownerId: currentUserId,
         localDaemonId,
         localMachineName,
@@ -177,7 +184,7 @@ export function RuntimesPage({
       }),
     [
       pendingProfiles,
-      runtimes,
+      ownedRuntimes,
       currentUserId,
       localDaemonId,
       localMachineName,
@@ -349,6 +356,14 @@ export function RuntimesPage({
       )}
     </div>
   );
+}
+
+export function filterOwnedRuntimes(
+  runtimes: AgentRuntime[],
+  currentUserId?: string | null,
+): AgentRuntime[] {
+  if (!currentUserId) return [];
+  return runtimes.filter((runtime) => runtime.owner_id === currentUserId);
 }
 
 // ---------------------------------------------------------------------------

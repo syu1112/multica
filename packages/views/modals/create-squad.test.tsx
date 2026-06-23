@@ -197,6 +197,8 @@ function makeAgent(overrides: Partial<Agent> & { id: string; name: string; owner
   return {
     workspace_id: "ws-1",
     runtime_id: "rt-1",
+    runtime_provider: "codex",
+    runtime_profile_id: null,
     description: "",
     instructions: "",
     avatar_url: null,
@@ -323,6 +325,32 @@ describe("CreateSquadModal", () => {
     const myIdx = all.findIndex((n) => n.textContent === "My Agents");
     const wsIdx = all.findIndex((n) => n.textContent === "Workspace Agents");
     expect(myIdx).toBeLessThan(wsIdx);
+  });
+
+  it("does not offer legacy runtime_id-only agents as runnable squad agents", () => {
+    mocks.agents = [
+      makeAgent({
+        id: "agent-legacy-only",
+        name: "LegacyOnly",
+        owner_id: ME,
+        runtime_id: "rt-legacy",
+        runtime_provider: "",
+        runtime_profile_id: null,
+      }),
+      makeAgent({
+        id: "agent-provider",
+        name: "ProviderReady",
+        owner_id: ME,
+        runtime_id: null,
+        runtime_provider: "codex",
+        runtime_profile_id: null,
+      }),
+    ];
+
+    renderModal();
+
+    expect(screen.queryByText("LegacyOnly")).not.toBeInTheDocument();
+    expect(screen.getAllByText("ProviderReady").length).toBeGreaterThan(0);
   });
 
   it("auto-clears an additional-members entry when the same agent is picked as leader", async () => {

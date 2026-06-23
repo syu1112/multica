@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -66,7 +67,10 @@ func (h *Handler) requireDaemonWorkspaceAccess(w http.ResponseWriter, r *http.Re
 	return ok
 }
 
-// requireDaemonRuntimeAccess looks up a runtime and verifies the caller owns its workspace.
+// requireDaemonRuntimeAccess looks up a runtime and verifies the caller can
+// operate that exact runtime. Workspace membership alone is not enough:
+// daemon tokens must match runtime.daemon_id, while user-backed PAT/JWT/cloud
+// PAT requests must come from runtime.owner_id.
 //
 // Only pgx.ErrNoRows is treated as a real "runtime gone" 404 — the daemon uses
 // that response to drop the stale runtime from its in-memory map and re-register,
@@ -90,7 +94,19 @@ func (h *Handler) requireDaemonRuntimeAccess(w http.ResponseWriter, r *http.Requ
 	if !h.requireDaemonWorkspaceAccess(w, r, uuidToString(rt.WorkspaceID)) {
 		return db.AgentRuntime{}, false
 	}
+	if !canAccessDaemonRuntime(r, rt) {
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return db.AgentRuntime{}, false
+	}
 	return rt, true
+}
+
+func canAccessDaemonRuntime(r *http.Request, rt db.AgentRuntime) bool {
+	if daemonID := middleware.DaemonIDFromContext(r.Context()); daemonID != "" {
+		return rt.DaemonID.Valid && rt.DaemonID.String == daemonID
+	}
+	userID := requestUserID(r)
+	return userID != "" && rt.OwnerID.Valid && uuidToString(rt.OwnerID) == userID
 }
 
 // requireDaemonTaskAccess looks up a task and verifies the caller owns its workspace.
@@ -133,6 +149,22 @@ func (h *Handler) requireDaemonTaskAccessWithWorkspace(w http.ResponseWriter, r 
 
 	if !h.requireDaemonWorkspaceAccess(w, r, wsID) {
 		return db.AgentTaskQueue{}, "", false
+	}
+	if task.RuntimeID.Valid {
+		rt, err := h.Queries.GetAgentRuntime(r.Context(), task.RuntimeID)
+		if err != nil {
+			if isNotFound(err) {
+				writeError(w, http.StatusNotFound, "task not found")
+				return db.AgentTaskQueue{}, "", false
+			}
+			slog.Warn("get task runtime failed", "task_id", taskID, "runtime_id", uuidToString(task.RuntimeID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to load task runtime")
+			return db.AgentTaskQueue{}, "", false
+		}
+		if !canAccessDaemonRuntime(r, rt) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return db.AgentTaskQueue{}, "", false
+		}
 	}
 	return task, wsID, true
 }
@@ -384,6 +416,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 				ProfileID:   profileUUID,
 			})
 			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					writeError(w, http.StatusNotFound, "runtime not found")
+					return
+				}
 				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
 					uuidToString(ownerID),
 					req.WorkspaceID,
@@ -428,6 +464,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 				OwnerID:     ownerID,
 			})
 			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					writeError(w, http.StatusNotFound, "runtime not found")
+					return
+				}
 				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
 					uuidToString(ownerID),
 					req.WorkspaceID,
@@ -506,7 +546,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "runtimes_count", len(resp))
 
 	h.publish(protocol.EventDaemonRegister, req.WorkspaceID, "system", "", map[string]any{
-		"runtimes": resp,
+		"action": "register",
 	})
 
 	repoResp := workspaceReposResponse(req.WorkspaceID, ws.Repos, ws.Settings)
@@ -527,12 +567,11 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 // just the first. Per match we reassign agents and tasks, record the legacy
 // id on the new row for audit, then delete the stale row.
 //
-// Scoping by (workspace_id, provider) is sufficient since provider is single-
-// runtime-per-daemon; `unique (workspace_id, daemon_id, provider)` prevents
-// any two *exact* matches but the `LOWER(...)` comparison crosses that bound
-// precisely when case-duplicate rows exist — which is the bug we're fixing.
-// We also dedupe across legacy ids so overlapping candidates (e.g. `foo` and
-// `foo.local` both resolving to the same stored row) don't double-process.
+// Scoping by (workspace_id, provider, owner_id) is required: legacy daemon ids
+// were hostname-derived, so two users can collide on a host name. A registering
+// runtime may only fold legacy rows owned by the same runtime owner. We also
+// dedupe across legacy ids so overlapping candidates (e.g. `foo` and `foo.local`
+// both resolving to the same stored row) don't double-process.
 func (h *Handler) mergeLegacyRuntimes(r *http.Request, registered db.AgentRuntime, provider string, legacyIDs []string) {
 	newID := uuidToString(registered.ID)
 	merged := make(map[string]struct{})
@@ -546,6 +585,7 @@ func (h *Handler) mergeLegacyRuntimes(r *http.Request, registered db.AgentRuntim
 		matches, err := h.Queries.FindLegacyRuntimesByDaemonID(r.Context(), db.FindLegacyRuntimesByDaemonIDParams{
 			WorkspaceID: registered.WorkspaceID,
 			Provider:    provider,
+			OwnerID:     registered.OwnerID,
 			DaemonID:    legacyID,
 		})
 		if err != nil {
@@ -555,6 +595,14 @@ func (h *Handler) mergeLegacyRuntimes(r *http.Request, registered db.AgentRuntim
 		for _, old := range matches {
 			oldID := uuidToString(old.ID)
 			if oldID == newID {
+				continue
+			}
+			if !registered.OwnerID.Valid || !old.OwnerID.Valid || old.OwnerID != registered.OwnerID {
+				slog.Warn("legacy runtime merge: owner mismatch",
+					"legacy_daemon_id", legacyID,
+					"old_runtime_id", oldID,
+					"new_runtime_id", newID,
+				)
 				continue
 			}
 			if _, seen := merged[oldID]; seen {
@@ -649,6 +697,10 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 		wsID := uuidToString(rt.WorkspaceID)
 		if !h.verifyDaemonWorkspaceAccess(r, wsID) {
 			slog.Warn("deregister: workspace mismatch", "runtime_id", rid)
+			continue
+		}
+		if !canAccessDaemonRuntime(r, rt) {
+			slog.Warn("deregister: runtime access denied", "runtime_id", rid)
 			continue
 		}
 
@@ -809,6 +861,11 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 		outcome = "workspace_denied"
 		return
 	}
+	if !canAccessDaemonRuntime(r, rt) {
+		outcome = "runtime_denied"
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return
+	}
 	authMs = time.Since(start).Milliseconds()
 
 	ack, m, err := h.processHeartbeat(r.Context(), rt, req.SupportsBatchImport)
@@ -884,8 +941,21 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	if !identity.AllowsWorkspace(uuidToString(rt.WorkspaceID)) {
 		return nil, fmt.Errorf("runtime not in connection workspace")
 	}
+	if !daemonIdentityCanAccessRuntime(identity, rt) {
+		return nil, fmt.Errorf("runtime not in connection identity")
+	}
 	ack, _, err := h.processHeartbeat(ctx, rt, supportsBatchImport)
 	return ack, err
+}
+
+func daemonIdentityCanAccessRuntime(identity daemonws.ClientIdentity, rt db.AgentRuntime) bool {
+	if identity.DaemonID != "" {
+		return rt.DaemonID.Valid && rt.DaemonID.String == identity.DaemonID
+	}
+	if identity.UserID != "" {
+		return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == identity.UserID
+	}
+	return false
 }
 
 // recordHeartbeat marks the runtime as alive. When LivenessStore is available
@@ -2243,6 +2313,7 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 	var input map[string]any
 	if m.Input != nil {
 		json.Unmarshal(m.Input, &input)
+		input = sanitizeTaskMessageInput(input)
 	}
 	createdAt := ""
 	if m.CreatedAt.Valid {
@@ -2258,6 +2329,53 @@ func taskMessageToPayload(m db.TaskMessage, taskID, issueID string) protocol.Tas
 		Input:     input,
 		Output:    m.Output.String,
 		CreatedAt: createdAt,
+	}
+}
+
+var taskMessageSensitiveInputKeys = map[string]struct{}{
+	"connectioncredentials": {},
+	"daemonoperation":       {},
+	"daemonoperationparams": {},
+	"runtimecallurl":        {},
+	"runtimeconnection":     {},
+	"runtimecredentials":    {},
+	"runtimedetailurl":      {},
+	"runtimedetails":        {},
+	"runtimeid":             {},
+	"runtimeselectoroption": {},
+	"workdir":               {},
+	"priorworkdir":          {},
+}
+
+func sanitizeTaskMessageInput(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	cleaned := make(map[string]any, len(input))
+	for key, value := range input {
+		if _, sensitive := taskMessageSensitiveInputKeys[normalizeTaskAuditKey(key)]; sensitive {
+			continue
+		}
+		cleaned[key] = sanitizeTaskMessageValue(value)
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	return cleaned
+}
+
+func sanitizeTaskMessageValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return sanitizeTaskMessageInput(v)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = sanitizeTaskMessageValue(item)
+		}
+		return out
+	default:
+		return value
 	}
 }
 
@@ -2320,7 +2438,7 @@ func (h *Handler) GetActiveTaskForIssue(w http.ResponseWriter, r *http.Request) 
 	workspaceID := uuidToString(issue.WorkspaceID)
 	resp := make([]AgentTaskResponse, len(tasks))
 	for i, t := range tasks {
-		resp[i] = taskToResponse(t, workspaceID)
+		resp[i] = taskToAuditResponse(t, workspaceID)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": resp})
@@ -2352,7 +2470,7 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
-	writeJSON(w, http.StatusOK, taskToResponse(*task, uuidToString(issue.WorkspaceID)))
+	writeJSON(w, http.StatusOK, taskToAuditResponse(*task, uuidToString(issue.WorkspaceID)))
 }
 
 // ListTasksByIssue returns all tasks (any status) for an issue — used for execution history.
@@ -2372,7 +2490,7 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 	workspaceID := uuidToString(issue.WorkspaceID)
 	resp := make([]AgentTaskResponse, len(tasks))
 	for i, t := range tasks {
-		resp[i] = taskToResponse(t, workspaceID)
+		resp[i] = taskToAuditResponse(t, workspaceID)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -2399,6 +2517,30 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 	if wsID == "" || wsID != middleware.WorkspaceIDFromContext(r.Context()) {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
+	}
+
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	if task.ChatSessionID.Valid {
+		if _, ok := h.gateChatSessionForUser(w, r, userID, wsID, uuidToString(task.ChatSessionID)); !ok {
+			return
+		}
+	} else {
+		agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
+			ID:          task.AgentID,
+			WorkspaceID: parseUUID(wsID),
+		})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		actorType, actorID := h.resolveActor(r, userID, wsID)
+		if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, wsID) {
+			writeError(w, http.StatusForbidden, "you do not have access to this agent")
+			return
+		}
 	}
 
 	var (

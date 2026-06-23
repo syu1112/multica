@@ -46,8 +46,8 @@ func TestFormatAdmissionReason(t *testing.T) {
 	}{
 		{"agent archived", db.Autopilot{AssigneeType: "agent"}, "agent is archived", "assignee agent is archived"},
 		{"squad archived", db.Autopilot{AssigneeType: "squad"}, "agent is archived", "squad leader agent is archived"},
-		{"agent no runtime", db.Autopilot{AssigneeType: "agent"}, "agent has no runtime bound", "assignee agent has no runtime bound"},
-		{"squad no runtime", db.Autopilot{AssigneeType: "squad"}, "agent has no runtime bound", "squad leader agent has no runtime bound"},
+		{"agent no runtime capability", db.Autopilot{AssigneeType: "agent"}, "agent has no runtime capability", "assignee agent has no runtime capability"},
+		{"squad no runtime capability", db.Autopilot{AssigneeType: "squad"}, "agent has no runtime capability", "squad leader agent has no runtime capability"},
 		{"runtime offline retains MUL-1899 suffix", db.Autopilot{AssigneeType: "agent"}, "agent runtime is offline", "agent runtime is offline at dispatch time"},
 	}
 	for _, tc := range tests {

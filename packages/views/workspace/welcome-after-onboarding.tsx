@@ -10,7 +10,12 @@ import { paths, useCurrentWorkspace } from "@multica/core/paths";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { issueKeys } from "@multica/core/issues/queries";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import type { Agent, CreateIssueRequest, Issue } from "@multica/core/types";
+import type {
+  Agent,
+  AgentRuntime,
+  CreateIssueRequest,
+  Issue,
+} from "@multica/core/types";
 import {
   Dialog,
   DialogContent,
@@ -49,7 +54,7 @@ import {
  *
  *   "runtime":
  *     1. Full-screen loading veil ("Preparing your Helper…")
- *     2. Find-or-create a "Multica Helper" agent on the picked runtime
+ *     2. Find-or-create a "Multica Helper" agent with the picked runtime's capability
  *        — `listAgents` first to dedupe against re-entries, then
  *        `createAgent` with the localized instructions from
  *        `onboarding/templates/helper-instructions.ts`.
@@ -138,7 +143,7 @@ const HELPER_AVATAR_URL =
 /**
  * Module-level dedupe for in-flight Helper setup. Keyed on
  * workspaceId+runtimeId so unrelated welcome flows (different workspaces /
- * runtimes) don't collide, but React 18+ StrictMode dev-mode double-mount
+ * picked runtimes) don't collide, but React 18+ StrictMode dev-mode double-mount
  * of the same flow shares one promise — both mounts await the same
  * listAgents/createAgent round-trip, so we never race-create two Helpers
  * (server-side UNIQUE (workspace_id, name) would 409 the second attempt
@@ -168,13 +173,15 @@ async function findOrCreateHelper(
         !a.archived_at,
     );
     if (found) return found;
+    const runtime = await resolveOwnedRuntime(workspaceId, runtimeId);
     const lang = pickContentLang(language);
     return api.createAgent({
       name: HELPER_AGENT_NAME,
       description: HELPER_DESCRIPTION[lang],
       instructions: HELPER_INSTRUCTIONS[lang],
       avatar_url: HELPER_AVATAR_URL,
-      runtime_id: runtimeId,
+      runtime_provider: runtime.provider,
+      runtime_profile_id: runtime.profile_id ?? null,
       visibility: "workspace",
       max_concurrent_tasks: 6,
       template: "multica_helper",
@@ -194,6 +201,21 @@ async function findOrCreateHelper(
     })
     .catch(() => {});
   return promise;
+}
+
+async function resolveOwnedRuntime(
+  workspaceId: string,
+  runtimeId: string,
+): Promise<AgentRuntime> {
+  const runtimes = await api.listRuntimes({
+    workspace_id: workspaceId,
+    owner: "me",
+  });
+  const runtime = runtimes.find((rt) => rt.id === runtimeId);
+  if (!runtime) {
+    throw new Error("Selected runtime is no longer available.");
+  }
+  return runtime;
 }
 
 /**
@@ -455,6 +477,7 @@ function RuntimeWelcome({
             priority: "high",
             assignee_type: "agent",
             assignee_id: agent.id,
+            runtime_id: runtimeId,
           });
         }),
       );

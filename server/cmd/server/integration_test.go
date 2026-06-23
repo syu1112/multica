@@ -21,6 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/realtime"
+	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 )
 
 var (
@@ -129,21 +130,21 @@ func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (strin
 	var runtimeID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at
 		)
-		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
+		VALUES ($1, NULL, $2, 'local', $3, 'online', $4, jsonb_build_object('cli_version', $5::text), $6, now())
 		RETURNING id
-	`, workspaceID, "Integration Test Runtime", "integration_test_runtime", "Integration test runtime").Scan(&runtimeID); err != nil {
+	`, workspaceID, "Integration Test Runtime", "integration_test_runtime", "Integration test runtime", agentpkg.MinQuickCreateCLIVersion, userID).Scan(&runtimeID); err != nil {
 		return "", "", err
 	}
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id
+			runtime_id, runtime_provider, visibility, max_concurrent_tasks, owner_id
 		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4)
-	`, workspaceID, "Integration Test Agent", runtimeID, userID); err != nil {
+		VALUES ($1, $2, '', 'local', '{}'::jsonb, $3, $4, 'workspace', 1, $5)
+	`, workspaceID, "Integration Test Agent", runtimeID, "integration_test_runtime", userID); err != nil {
 		return "", "", err
 	}
 

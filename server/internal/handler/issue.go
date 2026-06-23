@@ -22,7 +22,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
-	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -1762,9 +1761,15 @@ func (h *Handler) ChildIssueProgress(w http.ResponseWriter, r *http.Request) {
 // through as `--parent <uuid>` so the new issue is filed as a sub-issue,
 // keeping the sub-issue intent of the entry point regardless of whether
 // the user submits via manual or agent mode.
+//
+// RuntimeID is optional. When present, it is the current requester's
+// explicit local runtime choice for this one quick-create task. TaskService's
+// runtime resolver validates owner, workspace, online status, and agent
+// capability before enqueueing; the handler only parses the UUID.
 type QuickCreateIssueRequest struct {
 	AgentID       string   `json:"agent_id,omitempty"`
 	SquadID       string   `json:"squad_id,omitempty"`
+	RuntimeID     string   `json:"runtime_id,omitempty"`
 	Prompt        string   `json:"prompt"`
 	ProjectID     string   `json:"project_id,omitempty"`
 	ParentIssueID string   `json:"parent_issue_id,omitempty"`
@@ -1862,9 +1867,8 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Re-load the agent for the runtime liveness check below. Safe by
-	// construction: validateAssigneePair just confirmed it exists in this
-	// workspace and the caller has visibility.
+	// Re-load the agent for the capability check below. The concrete runtime
+	// is selected by TaskService per requester when the task is enqueued.
 	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
 		ID:          agentUUID,
 		WorkspaceID: wsUUID,
@@ -1873,27 +1877,18 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	if !agent.RuntimeID.Valid {
-		writeAgentUnavailable(w, "agent has no runtime")
-		return
-	}
-	if !h.isRuntimeOnline(r.Context(), agent.RuntimeID) {
-		writeAgentUnavailable(w, "agent's runtime is offline")
+	if !handlerAgentHasRuntimeCapability(agent) {
+		writeAgentUnavailable(w, "agent has no runtime capability")
 		return
 	}
 
-	// Daemon CLI version gate. The agent-side prompt + create-flow rely on
-	// behaviors introduced in MinQuickCreateCLIVersion (URL attachment
-	// handling, quick-create attachment binding, no-retry on partial failure).
-	// Older daemons either double-create issues on partial CLI failures, drop
-	// attachment bindings, or mishandle pasted screenshot URLs; fail closed
-	// before enqueuing rather than surface the breakage as an inbox failure
-	// twenty seconds later. Dev-built
-	// daemons (git-describe shape) are exempted inside CheckMinCLIVersion
-	// so `make daemon` works without weakening staging or production.
-	if status, payload := h.checkQuickCreateDaemonVersion(r.Context(), agent.RuntimeID); status != 0 {
-		writeJSON(w, status, payload)
-		return
+	var selectedRuntimeUUID pgtype.UUID
+	if strings.TrimSpace(req.RuntimeID) != "" {
+		id, ok := parseUUIDOrBadRequest(w, req.RuntimeID, "runtime_id")
+		if !ok {
+			return
+		}
+		selectedRuntimeUUID = id
 	}
 
 	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
@@ -1942,9 +1937,22 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		parentIssueUUID = pid
 	}
 
-	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, prompt, projectUUID, parentIssueUUID, attachmentIDs)
+	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, selectedRuntimeUUID, prompt, projectUUID, parentIssueUUID, attachmentIDs)
 	if err != nil {
 		slog.Warn("quick-create enqueue failed", append(logger.RequestAttrs(r), "error", err)...)
+		var versionErr *service.QuickCreateDaemonVersionError
+		if errors.As(err, &versionErr) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"code":            "daemon_version_unsupported",
+				"current_version": versionErr.CurrentVersion,
+				"min_version":     versionErr.MinVersion,
+			})
+			return
+		}
+		if reason, ok := runtimeResolveFailureReason(err); ok {
+			writeAgentUnavailable(w, reason)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to enqueue quick-create task")
 		return
 	}
@@ -1963,81 +1971,25 @@ func writeAgentUnavailable(w http.ResponseWriter, reason string) {
 	})
 }
 
-// isRuntimeOnline returns true when the given runtime is currently
-// reachable (status == "online"). Quick-create rejects submissions whose
-// agent's runtime is offline so the user gets immediate feedback in the
-// modal instead of an inbox failure twenty seconds later.
-func (h *Handler) isRuntimeOnline(ctx context.Context, runtimeID pgtype.UUID) bool {
-	rt, err := h.Queries.GetAgentRuntime(ctx, runtimeID)
-	if err != nil {
-		return false
-	}
-	return rt.Status == "online"
-}
-
-// checkQuickCreateDaemonVersion enforces MinQuickCreateCLIVersion against the
-// CLI version the daemon reported at registration time (stored on the runtime
-// row's metadata.cli_version). Returns (0, nil) when the version is
-// acceptable, otherwise (status, payload) ready to hand to writeJSON.
-//
-// Failure shape is stable so the modal can branch on the `code` field and
-// surface a "needs upgrade" hint that points at the specific runtime:
-//
-//	422 {
-//	  "code": "daemon_version_unsupported",
-//	  "current_version": "0.2.18" | "",
-//	  "min_version":     "0.2.21",
-//	  "runtime_id":      "<uuid>"
-//	}
-func (h *Handler) checkQuickCreateDaemonVersion(ctx context.Context, runtimeID pgtype.UUID) (int, map[string]any) {
-	rt, err := h.Queries.GetAgentRuntime(ctx, runtimeID)
-	if err != nil {
-		// Runtime row vanished between the online check and here — treat
-		// as unavailable rather than wedging the request on a 500.
-		return http.StatusUnprocessableEntity, map[string]any{
-			"code":   "agent_unavailable",
-			"reason": "agent's runtime is no longer registered",
-		}
-	}
-	current := readRuntimeCLIVersion(rt.Metadata)
-	switch err := agent.CheckMinCLIVersion(current); {
-	case err == nil:
-		return 0, nil
-	case errors.Is(err, agent.ErrCLIVersionMissing), errors.Is(err, agent.ErrCLIVersionTooOld):
-		return http.StatusUnprocessableEntity, map[string]any{
-			"code":            "daemon_version_unsupported",
-			"current_version": current,
-			"min_version":     agent.MinQuickCreateCLIVersion,
-			"runtime_id":      uuidToString(runtimeID),
-		}
+func runtimeResolveFailureReason(err error) (string, bool) {
+	switch {
+	case errors.Is(err, service.ErrRuntimeNotOwnedByRequester):
+		return "runtime is not owned by requester", true
+	case errors.Is(err, service.ErrRuntimeWorkspaceMismatch):
+		return "runtime does not belong to this workspace", true
+	case errors.Is(err, service.ErrRuntimeUnavailable):
+		return "runtime is not online", true
+	case errors.Is(err, service.ErrRuntimeCapabilityMismatch):
+		return "runtime is not compatible with this agent", true
+	case errors.Is(err, service.ErrNoCompatibleRuntimeForUser):
+		return "no compatible runtime for requester", true
+	case errors.Is(err, service.ErrRuntimeRequesterRequired):
+		return "requester is required to resolve runtime", true
+	case errors.Is(err, service.ErrRuntimeNotFound):
+		return "runtime not found", true
 	default:
-		// Defensive fall-through: unknown error from the version check is
-		// also fail-closed, since the gate exists precisely because we
-		// can't trust older daemons with this flow.
-		return http.StatusUnprocessableEntity, map[string]any{
-			"code":            "daemon_version_unsupported",
-			"current_version": current,
-			"min_version":     agent.MinQuickCreateCLIVersion,
-			"runtime_id":      uuidToString(runtimeID),
-		}
+		return "", false
 	}
-}
-
-// readRuntimeCLIVersion pulls metadata.cli_version off a runtime row. The
-// metadata column is JSONB on the wire; the daemon stores the multica CLI
-// version under that key during registration (see DaemonRegister).
-func readRuntimeCLIVersion(metadata []byte) string {
-	if len(metadata) == 0 {
-		return ""
-	}
-	var m map[string]any
-	if err := json.Unmarshal(metadata, &m); err != nil {
-		return ""
-	}
-	if v, ok := m["cli_version"].(string); ok {
-		return v
-	}
-	return ""
 }
 
 type CreateIssueRequest struct {
@@ -2051,6 +2003,7 @@ type CreateIssueRequest struct {
 	ProjectID     *string  `json:"project_id"`
 	StartDate     *string  `json:"start_date"`
 	DueDate       *string  `json:"due_date"`
+	RuntimeID     *string  `json:"runtime_id,omitempty"`
 	AttachmentIDs []string `json:"attachment_ids,omitempty"`
 	// OriginType / OriginID stamp the new issue with its provenance so
 	// platform-internal flows can deterministically locate it later. Only
@@ -2149,6 +2102,14 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var selectedRuntimeID pgtype.UUID
+	if req.RuntimeID != nil && *req.RuntimeID != "" {
+		id, ok := parseUUIDOrBadRequest(w, *req.RuntimeID, "runtime_id")
+		if !ok {
+			return
+		}
+		selectedRuntimeID = id
+	}
 
 	var startDate pgtype.Date
 	if req.StartDate != nil && *req.StartDate != "" {
@@ -2203,6 +2164,34 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// payload builder and the HTTP response share the same value.
 	prefix := h.getIssuePrefix(r.Context(), wsUUID)
 
+	pendingIssue := db.Issue{
+		WorkspaceID:  wsUUID,
+		Status:       status,
+		AssigneeType: assigneeType,
+		AssigneeID:   assigneeID,
+	}
+	requesterID := parseUUID(creatorID)
+	if h.shouldEnqueueAgentTask(r.Context(), pendingIssue) {
+		if _, err := h.TaskService.ResolveRuntimeForIssueByRequester(r.Context(), pendingIssue, requesterID, selectedRuntimeID); err != nil {
+			if reason, ok := runtimeResolveFailureReason(err); ok {
+				writeAgentUnavailable(w, reason)
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to resolve agent runtime")
+			return
+		}
+	}
+	if h.shouldEnqueueSquadLeaderOnAssign(r.Context(), pendingIssue) {
+		if err := h.preflightSquadLeaderRuntime(r.Context(), pendingIssue, requesterID, selectedRuntimeID); err != nil {
+			if reason, ok := runtimeResolveFailureReason(err); ok {
+				writeAgentUnavailable(w, reason)
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to resolve squad leader runtime")
+			return
+		}
+	}
+
 	// Analytics agent ID: assignee agent when the issue is being assigned
 	// to an agent, otherwise the creator agent for agent-authored issues.
 	// Resolved here (not in the service) because creator identity is HTTP-side.
@@ -2244,9 +2233,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		AttachmentIDs:  attachmentIDs,
 		AllowDuplicate: req.AllowDuplicate,
 	}, service.IssueCreateOpts{
-		ActorID:          actualCreatorID,
-		AnalyticsAgentID: analyticsAgentID,
-		Platform:         func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
+		ActorID:           actualCreatorID,
+		AnalyticsAgentID:  analyticsAgentID,
+		Platform:          func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
+		RequesterID:       requesterID,
+		SelectedRuntimeID: selectedRuntimeID,
 		BroadcastPayload: func(issue db.Issue, atts []db.Attachment) map[string]any {
 			payload := issueToResponse(issue, prefix)
 			payload.Attachments = buildAttachmentResponses(atts)
@@ -2270,6 +2261,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, service.ErrProjectNotFound) {
 		writeError(w, http.StatusBadRequest, "project not found in this workspace")
+		return
+	}
+	if reason, ok := runtimeResolveFailureReason(err); ok {
+		writeAgentUnavailable(w, reason)
 		return
 	}
 	if err != nil {
@@ -2298,6 +2293,7 @@ type UpdateIssueRequest struct {
 	DueDate       *string  `json:"due_date"`
 	ParentIssueID *string  `json:"parent_issue_id"`
 	ProjectID     *string  `json:"project_id"`
+	RuntimeID     *string  `json:"runtime_id,omitempty"`
 	// AttachmentIDs lets the description editor bind newly uploaded files to
 	// this issue so they surface in `GET /api/issues/:id/attachments` and the
 	// editor's preview Eye keeps working past a refresh. Existing bindings
@@ -2474,6 +2470,33 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var selectedRuntimeID pgtype.UUID
+	if req.RuntimeID != nil && *req.RuntimeID != "" {
+		id, ok := parseUUIDOrBadRequest(w, *req.RuntimeID, "runtime_id")
+		if !ok {
+			return
+		}
+		selectedRuntimeID = id
+	}
+
+	// Determine actor identity before persisting so runtime resolution can
+	// reject invalid agent-task assignments without mutating the issue first.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	requesterID := requesterIDFromHeader(userID)
+	pendingIssue := prevIssue
+	pendingIssue.AssigneeType = params.AssigneeType
+	pendingIssue.AssigneeID = params.AssigneeID
+	if params.Status.Valid {
+		pendingIssue.Status = params.Status.String
+	}
+	assigneeTouched := touchedType || touchedID
+	pendingAssigneeChanged := assigneeTouched &&
+		(prevIssue.AssigneeType.String != pendingIssue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(pendingIssue.AssigneeID))
+	pendingStatusChanged := req.Status != nil && prevIssue.Status != pendingIssue.Status
+	if err := h.preflightIssueAgentTaskRuntime(r, prevIssue, pendingIssue, pendingAssigneeChanged, pendingStatusChanged, requesterID, selectedRuntimeID, actorType); err != nil {
+		h.writeIssueTaskEnqueueError(w, r, "preflight issue task runtime failed", err)
+		return
+	}
 
 	issue, err := h.Queries.UpdateIssue(r.Context(), params)
 	if err != nil {
@@ -2490,7 +2513,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	resp := issueToResponse(issue, prefix)
 	slog.Info("issue updated", append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", workspaceID)...)
 
-	assigneeChanged := (req.AssigneeType != nil || req.AssigneeID != nil) &&
+	assigneeChanged := assigneeTouched &&
 		(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
 	statusChanged := req.Status != nil && prevIssue.Status != issue.Status
 	priorityChanged := req.Priority != nil && prevIssue.Priority != issue.Priority
@@ -2502,9 +2525,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	prevDueDate := dateToPtr(prevIssue.DueDate)
 	dueDateChanged := prevDueDate != resp.DueDate && (prevDueDate == nil) != (resp.DueDate == nil) ||
 		(prevDueDate != nil && resp.DueDate != nil && *prevDueDate != *resp.DueDate)
-
-	// Determine actor identity: agent (via X-Agent-ID header) or member.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
 		"issue":               resp,
@@ -2532,13 +2552,16 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+			if _, err := h.TaskService.EnqueueTaskForIssueByRequester(r.Context(), issue, requesterID, selectedRuntimeID); err != nil {
+				h.writeIssueTaskEnqueueError(w, r, "enqueue issue task failed", err)
+				return
+			}
 		}
 
 		// Squad assign: trigger the squad leader, respecting the backlog
 		// parking-lot rule used by agent assignment.
 		if h.shouldEnqueueSquadLeaderOnAssign(r.Context(), issue) {
-			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
+			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID, selectedRuntimeID)
 		}
 	}
 
@@ -2556,10 +2579,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
 		!h.isAgentRunningOnIssue(r, actorType, issue) {
 		if h.isAgentAssigneeReady(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+			if _, err := h.TaskService.EnqueueTaskForIssueByRequester(r.Context(), issue, requesterID, selectedRuntimeID); err != nil {
+				h.writeIssueTaskEnqueueError(w, r, "enqueue issue task failed", err)
+				return
+			}
 		}
 		if h.isSquadLeaderReady(r.Context(), issue) {
-			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
+			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID, selectedRuntimeID)
 		}
 	}
 
@@ -2682,7 +2708,7 @@ func (h *Handler) shouldEnqueueOnComment(ctx context.Context, issue db.Issue, ac
 		return false
 	}
 	agent, err := h.Queries.GetAgent(ctx, issue.AssigneeID)
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+	if err != nil || !handlerAgentHasRuntimeCapability(agent) || agent.ArchivedAt.Valid {
 		return false
 	}
 	if !h.canAccessPrivateAgent(ctx, agent, actorType, actorID, uuidToString(issue.WorkspaceID)) {
@@ -2736,18 +2762,81 @@ func (h *Handler) isAgentRunningOnIssue(r *http.Request, actorType string, issue
 }
 
 // isAgentAssigneeReady checks if an issue is assigned to an active agent
-// with a valid runtime.
+// with a configured runtime capability. The requester-specific online
+// runtime check happens at enqueue time in TaskService's resolver.
 func (h *Handler) isAgentAssigneeReady(ctx context.Context, issue db.Issue) bool {
 	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
 		return false
 	}
 
 	agent, err := h.Queries.GetAgent(ctx, issue.AssigneeID)
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+	if err != nil || !handlerAgentHasRuntimeCapability(agent) || agent.ArchivedAt.Valid {
 		return false
 	}
 
 	return true
+}
+
+func requesterIDFromHeader(userID string) pgtype.UUID {
+	if userID == "" {
+		return pgtype.UUID{}
+	}
+	id, err := util.ParseUUID(userID)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return id
+}
+
+func (h *Handler) preflightIssueAgentTaskRuntime(r *http.Request, prevIssue, issue db.Issue, assigneeChanged, statusChanged bool, requesterID, selectedRuntimeID pgtype.UUID, actorType string) error {
+	if assigneeChanged && h.shouldEnqueueAgentTask(r.Context(), issue) {
+		_, err := h.TaskService.ResolveRuntimeForIssueByRequester(r.Context(), issue, requesterID, selectedRuntimeID)
+		return err
+	}
+	if assigneeChanged && h.shouldEnqueueSquadLeaderOnAssign(r.Context(), issue) {
+		return h.preflightSquadLeaderRuntime(r.Context(), issue, requesterID, selectedRuntimeID)
+	}
+
+	if statusChanged && !assigneeChanged &&
+		prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
+		!h.isAgentRunningOnIssue(r, actorType, issue) &&
+		h.isAgentAssigneeReady(r.Context(), issue) {
+		_, err := h.TaskService.ResolveRuntimeForIssueByRequester(r.Context(), issue, requesterID, selectedRuntimeID)
+		return err
+	}
+	if statusChanged && !assigneeChanged &&
+		prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
+		h.isSquadLeaderReady(r.Context(), issue) {
+		return h.preflightSquadLeaderRuntime(r.Context(), issue, requesterID, selectedRuntimeID)
+	}
+
+	return nil
+}
+
+func (h *Handler) preflightSquadLeaderRuntime(ctx context.Context, issue db.Issue, requesterID, selectedRuntimeID pgtype.UUID) error {
+	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+		ID:          issue.AssigneeID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = h.TaskService.ResolveRuntimeForAgentByRequester(ctx, issue.WorkspaceID, squad.LeaderID, requesterID, selectedRuntimeID)
+	return err
+}
+
+func (h *Handler) writeIssueTaskEnqueueError(w http.ResponseWriter, r *http.Request, message string, err error) {
+	slog.Warn(message, append(logger.RequestAttrs(r), "error", err)...)
+	if reason, ok := runtimeResolveFailureReason(err); ok {
+		writeAgentUnavailable(w, reason)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "failed to enqueue issue task")
+}
+
+func handlerAgentHasRuntimeCapability(agent db.Agent) bool {
+	return agent.RuntimeProfileID.Valid ||
+		(agent.RuntimeProvider != "" && agent.RuntimeProvider != "legacy_local")
 }
 
 func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
@@ -2860,12 +2949,22 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var selectedRuntimeID pgtype.UUID
+	if req.Updates.RuntimeID != nil && *req.Updates.RuntimeID != "" {
+		id, ok := parseUUIDOrBadRequest(w, *req.Updates.RuntimeID, "runtime_id")
+		if !ok {
+			return
+		}
+		selectedRuntimeID = id
+	}
 
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
 	if !ok {
 		return
 	}
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	requesterID := requesterIDFromHeader(userID)
 	updated := 0
 	for _, issueID := range req.IssueIDs {
 		issueUUID, err := util.ParseUUID(issueID)
@@ -3007,6 +3106,20 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		pendingIssue := prevIssue
+		pendingIssue.AssigneeType = params.AssigneeType
+		pendingIssue.AssigneeID = params.AssigneeID
+		if params.Status.Valid {
+			pendingIssue.Status = params.Status.String
+		}
+		assigneeChanged := (batchTouchedType || batchTouchedID) &&
+			(prevIssue.AssigneeType.String != pendingIssue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(pendingIssue.AssigneeID))
+		statusChanged := req.Updates.Status != nil && prevIssue.Status != pendingIssue.Status
+		if err := h.preflightIssueAgentTaskRuntime(r, prevIssue, pendingIssue, assigneeChanged, statusChanged, requesterID, selectedRuntimeID, actorType); err != nil {
+			h.writeIssueTaskEnqueueError(w, r, "preflight batch issue task runtime failed", err)
+			return
+		}
+
 		issue, err := h.Queries.UpdateIssue(r.Context(), params)
 		if err != nil {
 			slog.Warn("batch update issue failed", "issue_id", issueID, "error", err)
@@ -3015,11 +3128,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 		resp := issueToResponse(issue, prefix)
-		actorType, actorID := h.resolveActor(r, userID, workspaceID)
-
-		assigneeChanged := (req.Updates.AssigneeType != nil || req.Updates.AssigneeID != nil) &&
-			(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
-		statusChanged := req.Updates.Status != nil && prevIssue.Status != issue.Status
 		priorityChanged := req.Updates.Priority != nil && prevIssue.Priority != issue.Priority
 
 		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
@@ -3032,10 +3140,13 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if assigneeChanged {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 			if h.shouldEnqueueAgentTask(r.Context(), issue) {
-				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+				if _, err := h.TaskService.EnqueueTaskForIssueByRequester(r.Context(), issue, requesterID, selectedRuntimeID); err != nil {
+					h.writeIssueTaskEnqueueError(w, r, "enqueue batch issue task failed", err)
+					return
+				}
 			}
 			if h.shouldEnqueueSquadLeaderOnAssign(r.Context(), issue) {
-				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
+				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID, selectedRuntimeID)
 			}
 		}
 
@@ -3047,10 +3158,13 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
 			!h.isAgentRunningOnIssue(r, actorType, issue) {
 			if h.isAgentAssigneeReady(r.Context(), issue) {
-				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+				if _, err := h.TaskService.EnqueueTaskForIssueByRequester(r.Context(), issue, requesterID, selectedRuntimeID); err != nil {
+					h.writeIssueTaskEnqueueError(w, r, "enqueue batch issue task failed", err)
+					return
+				}
 			}
 			if h.isSquadLeaderReady(r.Context(), issue) {
-				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
+				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID, selectedRuntimeID)
 			}
 		}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Check, ChevronRight, Copy, Terminal } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -62,19 +62,16 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const slug = useWorkspaceSlug();
   const qc = useQueryClient();
   const navigation = useNavigation();
-  const newRuntimeIdRef = useRef<string | null>(null);
 
   // `multica setup` is one blocking command that handles config + login
   // + daemon start; the dialog passively listens for the resulting
-  // `daemon:register` WS event and auto-advances to success.
+  // `daemon:register` WS event and auto-advances to success. The event is a
+  // workspace-wide refresh signal, so it must not carry or consume private
+  // runtime ids.
   const handleDaemonRegister = useCallback(
-    (payload: unknown) => {
+    (_payload: unknown) => {
       if (step !== "instructions") return;
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
-      const p = payload as Record<string, unknown> | null;
-      if (p?.runtime_id && typeof p.runtime_id === "string") {
-        newRuntimeIdRef.current = p.runtime_id;
-      }
       setStep("success");
     },
     [step, qc, wsId],
@@ -88,15 +85,6 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const handleGoToRuntime = () => {
-    onClose();
-    if (slug && newRuntimeIdRef.current) {
-      navigation.push(
-        paths.workspace(slug).runtimeDetail(newRuntimeIdRef.current),
-      );
-    }
-  };
-
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-lg">
@@ -104,9 +92,6 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
         {step === "success" && (
           <SuccessStep
             onGoToAgents={handleGoToAgents}
-            onGoToRuntime={
-              newRuntimeIdRef.current ? handleGoToRuntime : undefined
-            }
           />
         )}
       </DialogContent>
@@ -331,10 +316,8 @@ function LiveListening() {
 
 function SuccessStep({
   onGoToAgents,
-  onGoToRuntime,
 }: {
   onGoToAgents: () => void;
-  onGoToRuntime?: () => void;
 }) {
   const { t } = useT("runtimes");
   return (
@@ -358,11 +341,6 @@ function SuccessStep({
       </div>
 
       <DialogFooter className="m-0 rounded-b-xl border-t bg-muted/30 px-6 py-3">
-        {onGoToRuntime && (
-          <Button variant="ghost" size="sm" onClick={onGoToRuntime}>
-            {t(($) => $.connect.view_runtime)}
-          </Button>
-        )}
         <Button size="sm" onClick={onGoToAgents}>
           {t(($) => $.connect.create_agent)}
           <ChevronRight className="h-3.5 w-3.5" aria-hidden />

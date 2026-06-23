@@ -256,23 +256,31 @@ func TestBootstrapOnboardingRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	}
 
 	var (
-		agentName    string
-		agentRuntime string
-		instructions string
-		avatarURL    *string
+		agentName             string
+		agentRuntime          *string
+		agentRuntimeProvider  string
+		agentRuntimeProfileID *string
+		instructions          string
+		avatarURL             *string
 	)
 	if err := testPool.QueryRow(ctx, `
-		SELECT name, runtime_id, instructions, avatar_url
+		SELECT name, runtime_id::text, runtime_provider, runtime_profile_id::text, instructions, avatar_url
 		  FROM agent
 		 WHERE id = $1
-	`, resp.AgentID).Scan(&agentName, &agentRuntime, &instructions, &avatarURL); err != nil {
+	`, resp.AgentID).Scan(&agentName, &agentRuntime, &agentRuntimeProvider, &agentRuntimeProfileID, &instructions, &avatarURL); err != nil {
 		t.Fatalf("lookup assistant: %v", err)
 	}
 	if agentName != onboardingAssistantName {
 		t.Fatalf("agent name = %q, want %q", agentName, onboardingAssistantName)
 	}
-	if agentRuntime != testRuntimeID {
-		t.Fatalf("agent runtime = %q, want %q", agentRuntime, testRuntimeID)
+	if agentRuntime != nil {
+		t.Fatalf("agent runtime_id = %q, want NULL", *agentRuntime)
+	}
+	if agentRuntimeProvider == "" {
+		t.Fatal("agent runtime_provider was not set from onboarding runtime capability")
+	}
+	if agentRuntimeProfileID != nil {
+		t.Fatalf("agent runtime_profile_id = %q, want NULL for built-in runtime", *agentRuntimeProfileID)
 	}
 	if !strings.Contains(instructions, "built-in AI assistant") {
 		t.Fatalf("assistant instructions were not seeded with the new identity: %q", instructions)
@@ -478,6 +486,166 @@ func TestBootstrapOnboardingRuntime_NoStarterPrompt(t *testing.T) {
 	}
 	if description == nil || *description != onboardingIssueDescription {
 		t.Fatalf("issue description = %v, want fallback onboardingIssueDescription", description)
+	}
+}
+
+func TestBootstrapOnboardingRuntimeRejectsOfflineRuntimeBeforePersisting(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `
+			DELETE FROM agent_task_queue
+			 WHERE agent_id IN (
+			       SELECT id FROM agent
+			        WHERE workspace_id = $1 AND name = $2
+			 )
+		`, testWorkspaceID, onboardingAssistantName)
+		testPool.Exec(ctx,
+			`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
+			testWorkspaceID, onboardingIssueTitle,
+		)
+		testPool.Exec(ctx,
+			`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
+			testWorkspaceID, onboardingAssistantName,
+		)
+		testPool.Exec(ctx,
+			`DELETE FROM agent_runtime WHERE provider = 'onboarding_offline_runtime' AND workspace_id = $1`,
+			testWorkspaceID,
+		)
+		testPool.Exec(ctx,
+			`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
+			testUserID,
+		)
+	})
+	testPool.Exec(ctx,
+		`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
+		testWorkspaceID, onboardingIssueTitle,
+	)
+	testPool.Exec(ctx,
+		`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, onboardingAssistantName,
+	)
+	testPool.Exec(ctx,
+		`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
+		testUserID,
+	)
+
+	var offlineRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, visibility, last_seen_at
+		)
+		VALUES ($1, NULL, 'Offline Onboarding Runtime', 'local', 'onboarding_offline_runtime', 'offline',
+		        'offline runtime', '{}'::jsonb, $2, 'private', NULL)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&offlineRuntimeID); err != nil {
+		t.Fatalf("create offline runtime: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.BootstrapOnboardingRuntime(w, newRequest(http.MethodPost, "/api/me/onboarding/runtime-bootstrap", map[string]string{
+		"workspace_id": testWorkspaceID,
+		"runtime_id":   offlineRuntimeID,
+	}))
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("BootstrapOnboardingRuntime: expected 422 for offline runtime, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["code"] != "agent_unavailable" {
+		t.Fatalf("response code = %v, want agent_unavailable", resp["code"])
+	}
+
+	var issueCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM issue WHERE workspace_id = $1 AND title = $2`,
+		testWorkspaceID, onboardingIssueTitle,
+	).Scan(&issueCount); err != nil {
+		t.Fatalf("count onboarding issues: %v", err)
+	}
+	if issueCount != 0 {
+		t.Fatalf("onboarding issue count = %d, want 0", issueCount)
+	}
+
+	var agentCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, onboardingAssistantName,
+	).Scan(&agentCount); err != nil {
+		t.Fatalf("count onboarding agents: %v", err)
+	}
+	if agentCount != 0 {
+		t.Fatalf("onboarding agent count = %d, want 0", agentCount)
+	}
+
+	var onboardedAt *time.Time
+	if err := testPool.QueryRow(ctx,
+		`SELECT onboarded_at FROM "user" WHERE id = $1`,
+		testUserID,
+	).Scan(&onboardedAt); err != nil {
+		t.Fatalf("load user onboarding state: %v", err)
+	}
+	if onboardedAt != nil {
+		t.Fatalf("onboarded_at was set despite runtime rejection: %v", *onboardedAt)
+	}
+}
+
+func TestBootstrapOnboardingRuntimeHidesMissingRuntimeBeforePersisting(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	t.Cleanup(func() {
+		testPool.Exec(ctx,
+			`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
+			testWorkspaceID, onboardingIssueTitle,
+		)
+		testPool.Exec(ctx,
+			`DELETE FROM agent WHERE workspace_id = $1 AND name = $2`,
+			testWorkspaceID, onboardingAssistantName,
+		)
+		testPool.Exec(ctx,
+			`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
+			testUserID,
+		)
+	})
+
+	w := httptest.NewRecorder()
+	testHandler.BootstrapOnboardingRuntime(w, newRequest(http.MethodPost, "/api/me/onboarding/runtime-bootstrap", map[string]string{
+		"workspace_id": testWorkspaceID,
+		"runtime_id":   "11111111-2222-3333-4444-555555555555",
+	}))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("BootstrapOnboardingRuntime: expected 404 for missing runtime, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var issueCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM issue WHERE workspace_id = $1 AND title = $2`,
+		testWorkspaceID, onboardingIssueTitle,
+	).Scan(&issueCount); err != nil {
+		t.Fatalf("count onboarding issues: %v", err)
+	}
+	if issueCount != 0 {
+		t.Fatalf("onboarding issue count = %d, want 0", issueCount)
+	}
+
+	var agentCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, onboardingAssistantName,
+	).Scan(&agentCount); err != nil {
+		t.Fatalf("count onboarding agents: %v", err)
+	}
+	if agentCount != 0 {
+		t.Fatalf("onboarding agent count = %d, want 0", agentCount)
 	}
 }
 

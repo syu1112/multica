@@ -66,7 +66,12 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
   const { data: wsMembers = [] } = useQuery(memberListOptions(wsId));
 
   const activeAgents = useMemo(
-    () => agents.filter((a: Agent) => !a.archived_at && a.runtime_id),
+    () =>
+      agents.filter(
+        (a: Agent) =>
+          !a.archived_at &&
+          (!!a.runtime_provider || !!a.runtime_profile_id),
+      ),
     [agents],
   );
 

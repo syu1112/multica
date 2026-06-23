@@ -105,8 +105,8 @@
       "public": "Public"
     },
     "visibility_hint": {
-      "private": "Only you and workspace admins can create agents on this runtime.",
-      "public": "Any workspace member can create agents on this runtime."
+      "private": "Only you can use this local runtime.",
+      "public": "Legacy visibility metadata; other members still cannot use this local runtime."
     },
     "visibility_toast_updated": "Visibility set to {{visibility}}",
     "visibility_toast_failed": "Failed to update visibility",
@@ -263,8 +263,8 @@
     "cli_managed_badge": "Desktop",
     "row_actions_aria": "Row actions",
     "delete_action": "Delete",
-    "delete_permission_hint": "Only the runtime owner and workspace admins can delete this runtime",
-    "delete_admin_hint": "Only the runtime owner and workspace admins can delete a runtime.",
+    "delete_permission_hint": "Only the runtime owner can delete this runtime",
+    "delete_admin_hint": "Only the runtime owner can delete a runtime.",
     "badge_builtin": "Built-in",
     "badge_custom": "Custom",
     "badge_registering": "Registering",

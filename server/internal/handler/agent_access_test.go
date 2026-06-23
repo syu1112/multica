@@ -97,16 +97,32 @@ func privateAgentTestFixture(t *testing.T) (agentID, ownerID, memberID string) {
 		t.Fatalf("add plain member: %v", err)
 	}
 
+	var ownerRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, last_seen_at
+		)
+		VALUES ($1, NULL, 'Private Agent Owner Runtime', 'local', 'handler_test_runtime',
+		        'online', 'owner runtime', '{}'::jsonb, $2, now())
+		RETURNING id
+	`, testWorkspaceID, ownerID).Scan(&ownerRuntimeID); err != nil {
+		t.Fatalf("create owner runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, ownerRuntimeID)
+	})
+
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			runtime_id, runtime_provider, visibility, max_concurrent_tasks, owner_id,
 			instructions, custom_env, custom_args
 		)
 		VALUES ($1, 'private-access-test-agent', '', 'cloud', '{}'::jsonb,
-		        $2, 'private', 1, $3, '', '{}'::jsonb, '[]'::jsonb)
+		        $2, 'handler_test_runtime', 'private', 1, $3, '', '{}'::jsonb, '[]'::jsonb)
 		RETURNING id
-	`, testWorkspaceID, handlerTestRuntimeID(t), ownerID).Scan(&agentID); err != nil {
+	`, testWorkspaceID, ownerRuntimeID, ownerID).Scan(&agentID); err != nil {
 		t.Fatalf("create private agent: %v", err)
 	}
 	t.Cleanup(func() {

@@ -325,11 +325,11 @@ func TestAutopilotDispatchSkipsWhenRuntimeOffline(t *testing.T) {
 	var runtimeID, agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at
 		)
-		VALUES ($1, NULL, 'Offline runtime', 'local', 'mul1899_offline_runtime', 'offline', '{}'::jsonb, '{}'::jsonb, now())
+		VALUES ($1, NULL, 'Offline runtime', 'local', 'mul1899_offline_runtime', 'offline', '{}'::jsonb, '{}'::jsonb, $2, now())
 		RETURNING id::text
-	`, parseUUID(testWorkspaceID)).Scan(&runtimeID); err != nil {
+	`, parseUUID(testWorkspaceID), parseUUID(testUserID)).Scan(&runtimeID); err != nil {
 		t.Fatalf("create offline runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -339,9 +339,9 @@ func TestAutopilotDispatchSkipsWhenRuntimeOffline(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id
+			runtime_id, runtime_provider, visibility, max_concurrent_tasks, owner_id
 		)
-		VALUES ($1, 'mul1899-offline-agent', '', 'local', '{}'::jsonb, $2, 'workspace', 1, $3)
+		VALUES ($1, 'mul1899-offline-agent', '', 'local', '{}'::jsonb, $2, 'mul1899_offline_runtime', 'workspace', 1, $3)
 		RETURNING id::text
 	`, parseUUID(testWorkspaceID), runtimeID, parseUUID(testUserID)).Scan(&agentID); err != nil {
 		t.Fatalf("create offline agent: %v", err)
@@ -430,11 +430,11 @@ func TestManualTriggerDoesNotErrorOnPostAdmissionSkip(t *testing.T) {
 	var runtimeID, agentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at
 		)
-		VALUES ($1, NULL, 'Manual-trigger skip runtime', 'local', 'mul2429_manual_skip_runtime', 'offline', '{}'::jsonb, '{}'::jsonb, now())
+		VALUES ($1, NULL, 'Manual-trigger skip runtime', 'local', 'mul2429_manual_skip_runtime', 'offline', '{}'::jsonb, '{}'::jsonb, $2, now())
 		RETURNING id::text
-	`, parseUUID(testWorkspaceID)).Scan(&runtimeID); err != nil {
+	`, parseUUID(testWorkspaceID), parseUUID(testUserID)).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
 	t.Cleanup(func() {
@@ -444,9 +444,9 @@ func TestManualTriggerDoesNotErrorOnPostAdmissionSkip(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id
+			runtime_id, runtime_provider, visibility, max_concurrent_tasks, owner_id
 		)
-		VALUES ($1, 'mul2429-manual-skip-agent', '', 'local', '{}'::jsonb, $2, 'workspace', 1, $3)
+		VALUES ($1, 'mul2429-manual-skip-agent', '', 'local', '{}'::jsonb, $2, 'mul2429_manual_skip_runtime', 'workspace', 1, $3)
 		RETURNING id::text
 	`, parseUUID(testWorkspaceID), runtimeID, parseUUID(testUserID)).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)

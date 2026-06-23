@@ -13,9 +13,6 @@ import {
   Clock,
   Copy,
   Check,
-  Monitor,
-  Cloud,
-  Cpu,
   Filter,
   Folder,
   ArrowDownNarrowWide,
@@ -36,7 +33,7 @@ import {
 import { ActorAvatar } from "../actor-avatar";
 import { api } from "@multica/core/api";
 import { useTranscriptViewStore, type TranscriptSortDirection } from "@multica/core/agents/stores";
-import type { AgentTask, Agent, AgentRuntime } from "@multica/core/types/agent";
+import type { AgentTask, Agent } from "@multica/core/types/agent";
 import { redactSecrets } from "./redact";
 import type { TimelineItem } from "./build-timeline";
 import { useT } from "../../i18n";
@@ -182,7 +179,6 @@ export function AgentTranscriptDialog({
   const [copied, setCopied] = useState(false);
   const [copiedWorkdir, setCopiedWorkdir] = useState(false);
   const [agentInfo, setAgentInfo] = useState<Agent | null>(null);
-  const [runtimeInfo, setRuntimeInfo] = useState<AgentRuntime | null>(null);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const sortDirection = useTranscriptViewStore((s) => s.sortDirection);
   const setSortDirection = useTranscriptViewStore((s) => s.setSortDirection);
@@ -240,7 +236,9 @@ export function AgentTranscriptDialog({
     [sortDirection, setSortDirection],
   );
 
-  // Fetch agent and runtime metadata when dialog opens
+  // Fetch agent metadata when dialog opens. Runtime metadata intentionally is
+  // not fetched from task.runtime_id: transcript views are audit surfaces, not
+  // runtime detail or invocation surfaces.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -251,16 +249,8 @@ export function AgentTranscriptDialog({
       }).catch(() => {});
     }
 
-    if (task.runtime_id) {
-      api.listRuntimes().then((runtimes) => {
-        if (cancelled) return;
-        const rt = runtimes.find((r) => r.id === task.runtime_id);
-        if (rt) setRuntimeInfo(rt);
-      }).catch(() => {});
-    }
-
     return () => { cancelled = true; };
-  }, [open, task.agent_id, task.runtime_id]);
+  }, [open, task.agent_id]);
 
   // Elapsed time for live tasks
   useEffect(() => {
@@ -445,23 +435,6 @@ export function AgentTranscriptDialog({
 
           {/* Metadata chips row */}
           <div className="flex items-center gap-2 flex-wrap text-xs">
-            {/* Runtime provider */}
-            {runtimeInfo?.provider && (
-              <MetadataChip icon={<Cpu className="h-3 w-3" />}>
-                {formatProvider(runtimeInfo.provider)}
-              </MetadataChip>
-            )}
-
-            {/* Runtime environment */}
-            {runtimeInfo && (
-              <MetadataChip
-                icon={runtimeInfo.runtime_mode === "cloud" ? <Cloud className="h-3 w-3" /> : <Monitor className="h-3 w-3" />}
-              >
-                {runtimeInfo.name}
-                <span className="text-muted-foreground/60 ml-0.5">({runtimeInfo.runtime_mode})</span>
-              </MetadataChip>
-            )}
-
             {/* Agent type / description */}
             {agentInfo?.description && (
               <MetadataChip icon={<Bot className="h-3 w-3" />}>
@@ -638,16 +611,6 @@ function MetadataChip({ icon, children }: { icon?: React.ReactNode; children: Re
       {children}
     </span>
   );
-}
-
-function formatProvider(provider: string): string {
-  const map: Record<string, string> = {
-    claude: "Claude Code",
-    "claude-code": "Claude Code",
-    codex: "Codex",
-    pi: "Pi",
-  };
-  return map[provider.toLowerCase()] ?? provider;
 }
 
 // ─── Timeline bar (colored segments) ────────────────────────────────────────

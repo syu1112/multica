@@ -1,11 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Lock, UserMinus } from "lucide-react";
-import type { Agent, IssueAssigneeType, UpdateIssueRequest } from "@multica/core/types";
+import { ArrowLeft, Cpu, Lock, UserMinus } from "lucide-react";
+import type { Agent, AgentRuntime, IssueAssigneeType, UpdateIssueRequest } from "@multica/core/types";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
+import { runtimeMatchesAgentCapability } from "@multica/core/agents";
 import { canAssignAgentToIssue } from "@multica/core/permissions";
+import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions, squadListOptions, assigneeFrequencyOptions } from "@multica/core/workspace/queries";
@@ -46,6 +48,7 @@ export function AssigneePicker({
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
   align,
+  runtimeChoice = true,
 }: {
   assigneeType: IssueAssigneeType | null;
   assigneeId: string | null;
@@ -55,6 +58,7 @@ export function AssigneePicker({
   open?: boolean;
   onOpenChange?: (v: boolean) => void;
   align?: "start" | "center" | "end";
+  runtimeChoice?: boolean;
 }) {
   const { t } = useT("issues");
   const [internalOpen, setInternalOpen] = useState(false);
@@ -66,8 +70,10 @@ export function AssigneePicker({
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: frequency = [] } = useQuery(assigneeFrequencyOptions(wsId));
   const { getActorName } = useActorName();
+  const [runtimeChoiceAgent, setRuntimeChoiceAgent] = useState<Agent | null>(null);
 
   const currentMember = members.find((m) => m.user_id === user?.id);
   const memberRole = currentMember?.role;
@@ -93,6 +99,13 @@ export function AssigneePicker({
   const filteredSquads = squads
     .filter((s) => !s.archived_at && (s.name.toLowerCase().includes(query) || matchesPinyin(s.name, query)))
     .sort((a, b) => getFreq("squad", b.id) - getFreq("squad", a.id));
+  const compatibleRuntimesForAgent = (agent: Agent): AgentRuntime[] =>
+    runtimes.filter(
+      (runtime) =>
+        runtime.owner_id === user?.id &&
+        runtime.status === "online" &&
+        runtimeMatchesAgentCapability(agent, runtime),
+    );
 
   const isSelected = (type: string, id: string) =>
     assigneeType === type && assigneeId === id;
@@ -107,11 +120,14 @@ export function AssigneePicker({
       open={open}
       onOpenChange={(v: boolean) => {
         setOpen(v);
-        if (!v) setFilter("");
+        if (!v) {
+          setFilter("");
+          setRuntimeChoiceAgent(null);
+        }
       }}
       width="w-64"
       align={align}
-      searchable
+      searchable={!runtimeChoiceAgent}
       searchPlaceholder={t(($) => $.pickers.assignee.search_placeholder)}
       onSearchChange={setFilter}
       triggerRender={triggerRender}
@@ -126,6 +142,35 @@ export function AssigneePicker({
         )
       }
     >
+      {runtimeChoiceAgent ? (
+        <>
+          <PickerItem selected={false} onClick={() => setRuntimeChoiceAgent(null)}>
+            <ArrowLeft className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="truncate">{runtimeChoiceAgent.name}</span>
+          </PickerItem>
+          <PickerSection label={t(($) => $.pickers.assignee.runtime_group)}>
+            {compatibleRuntimesForAgent(runtimeChoiceAgent).map((runtime) => (
+              <PickerItem
+                key={runtime.id}
+                selected={false}
+                onClick={() => {
+                  onUpdate({
+                    assignee_type: "agent",
+                    assignee_id: runtimeChoiceAgent.id,
+                    runtime_id: runtime.id,
+                  });
+                  setRuntimeChoiceAgent(null);
+                  setOpen(false);
+                }}
+              >
+                <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="truncate">{runtime.name}</span>
+              </PickerItem>
+            ))}
+          </PickerSection>
+        </>
+      ) : (
+        <>
       {/* Unassigned option — hidden when search is active */}
       {!query && (
         <PickerItem
@@ -184,9 +229,18 @@ export function AssigneePicker({
                 tooltip={!allowed ? decision.message : undefined}
                 onClick={() => {
                   if (!allowed) return;
+                  const compatibleRuntimes = compatibleRuntimesForAgent(a);
+                  if (runtimeChoice && compatibleRuntimes.length > 1) {
+                    setFilter("");
+                    setRuntimeChoiceAgent(a);
+                    return;
+                  }
                   onUpdate({
                     assignee_type: "agent",
                     assignee_id: a.id,
+                    ...(compatibleRuntimes[0]?.id
+                      ? { runtime_id: compatibleRuntimes[0].id }
+                      : {}),
                   });
                   setOpen(false);
                 }}
@@ -229,6 +283,8 @@ export function AssigneePicker({
         filteredAgents.length === 0 &&
         filteredSquads.length === 0 &&
         filter && <PickerEmpty />}
+        </>
+      )}
     </PropertyPicker>
   );
 }

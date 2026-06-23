@@ -4,22 +4,17 @@ import { useEffect, useState } from "react";
 import {
   Trash2,
   ChevronRight,
-  Cpu,
   Globe,
   Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import type { AgentRuntime, Agent, MemberWithUser } from "@multica/core/types";
+import type { AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
+import { memberListOptions } from "@multica/core/workspace/queries";
 import { useUpdateRuntime } from "@multica/core/runtimes/mutations";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
-import {
-  type AgentPresenceDetail,
-  useWorkspacePresenceMap,
-} from "@multica/core/agents";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -29,8 +24,7 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
-import { AppLink, useNavigation } from "../../navigation";
-import { availabilityConfig, workloadConfig } from "../../agents/presence";
+import { useNavigation } from "../../navigation";
 import { formatLastSeen } from "../utils";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
@@ -69,9 +63,7 @@ function shortDaemonId(id: string | null): string | null {
 
 // 30s tick keeps derived runtime health honest as time-based windows
 // (recently_lost → offline → about_to_gc) cross thresholds without any new
-// query data arriving. Agent presence has no time windows anymore, so it
-// doesn't need this — but useWorkspacePresenceMap is the dependency we
-// already mounted on this page, and that's wired to query data, not `now`.
+// query data arriving.
 function useNowTick(intervalMs = 30_000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -93,8 +85,6 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
   const now = useNowTick();
 
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -104,18 +94,8 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
     ? members.find((m) => m.user_id === runtime.owner_id) ?? null
     : null;
 
-  const currentMember = user
-    ? members.find((m) => m.user_id === user.id)
-    : null;
-  const isAdmin = currentMember
-    ? currentMember.role === "owner" || currentMember.role === "admin"
-    : false;
   const isRuntimeOwner = user && runtime.owner_id === user.id;
-  const canDelete = isAdmin || isRuntimeOwner;
-
-  const servingAgents = agents.filter(
-    (a) => a.runtime_id === runtime.id && !a.archived_at,
-  );
+  const canDelete = !!isRuntimeOwner;
 
   // Successful delete (light or cascade) closes the dialog and navigates
   // back to the runtimes list. Toast lives here so the cascade-mode count
@@ -167,13 +147,8 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
             <UsageSection runtime={runtime} />
           </div>
 
-          {/* Right rail: serving agents + diagnostics */}
+          {/* Right rail: diagnostics */}
           <div className="space-y-4">
-            <ServingAgentsCard
-              agents={servingAgents}
-              presenceMap={presenceMap}
-              agentHref={(id) => paths.agentDetail(id)}
-            />
             <DiagnosticsCard
               runtime={runtime}
               cliVersion={cliVersion}
@@ -355,86 +330,6 @@ function Fact({
   );
 }
 
-function ServingAgentsCard({
-  agents,
-  presenceMap,
-  agentHref,
-}: {
-  agents: Agent[];
-  presenceMap: Map<string, AgentPresenceDetail>;
-  agentHref: (agentId: string) => string;
-}) {
-  const { t } = useT("runtimes");
-  const { t: tAgents } = useT("agents");
-  return (
-    <div className="rounded-lg border">
-      <div className="flex items-center justify-between border-b px-4 py-2.5">
-        <span className="text-xs font-semibold">{t(($) => $.detail.serving_title)}</span>
-        <span className="text-xs text-muted-foreground">
-          {t(($) => $.detail.serving_count, { count: agents.length })}
-        </span>
-      </div>
-      {agents.length === 0 ? (
-        <div className="flex flex-col items-center px-4 py-6 text-center">
-          <Cpu className="h-5 w-5 text-muted-foreground/40" />
-          <p className="mt-2 text-xs text-muted-foreground">
-            {t(($) => $.detail.no_agents)}
-          </p>
-        </div>
-      ) : (
-        <div className="divide-y">
-          {agents.map((agent) => {
-            const detail = presenceMap.get(agent.id);
-            const av = detail
-              ? availabilityConfig[detail.availability]
-              : availabilityConfig.offline;
-            const avLabel = tAgents(($) => $.availability[detail?.availability ?? "offline"]);
-            const wl = detail ? workloadConfig[detail.workload] : null;
-            const running = detail?.runningCount ?? 0;
-            const queued = detail?.queuedCount ?? 0;
-            return (
-              <AppLink
-                key={agent.id}
-                href={agentHref(agent.id)}
-                className="group flex items-center gap-2 px-4 py-2 transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none"
-              >
-                <ActorAvatar actorType="agent" actorId={agent.id} size={20} enableHoverCard showStatusDot />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-medium">
-                    {agent.name}
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className={`h-1.5 w-1.5 rounded-full ${av.dotClass}`} />
-                      <span className={av.textClass}>{avLabel}</span>
-                    </span>
-                    {wl && detail && detail.workload !== "idle" && (
-                      <span className={`inline-flex items-center gap-1 ${wl.textClass}`}>
-                        <span className="text-muted-foreground">·</span>
-                        <wl.icon
-                          className={`h-3 w-3 ${detail.workload === "working" ? "animate-spin" : ""}`}
-                        />
-                        {tAgents(($) => $.workload[detail.workload])}
-                        {running > 0 && (
-                          <span className="text-muted-foreground">{t(($) => $.detail.running_chip, { count: running })}</span>
-                        )}
-                        {queued > 0 && (
-                          <span className="text-muted-foreground">{t(($) => $.detail.queued_chip, { count: queued })}</span>
-                        )}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
-              </AppLink>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function DiagnosticsCard({
   runtime,
   cliVersion,
@@ -450,9 +345,9 @@ function DiagnosticsCard({
 }) {
   const { t } = useT("runtimes");
   const isLocal = runtime.runtime_mode === "local";
-  // canDelete here doubles as the "can edit runtime" predicate — it already
-  // means "workspace owner/admin OR runtime owner", which is the same gate
-  // the server enforces for the visibility PATCH.
+  // canDelete here doubles as the "can edit runtime" predicate. Runtime
+  // visibility/editing is owner-only; workspace owner/admin roles do not
+  // expose another member's runtime controls.
   return (
     <div className="rounded-lg border">
       <div className="border-b px-4 py-2.5">
@@ -534,11 +429,12 @@ function VisibilityReadout({ runtime }: { runtime: AgentRuntime }) {
   );
 }
 
-// VisibilityEditor lets the runtime owner (or workspace admin) flip
-// public↔private. The PATCH endpoint also re-checks; this is a UI gate, not
-// a security boundary. Per-choice description text lives in the hover
-// tooltip so the two buttons stay a tight icon+label pair instead of the
-// previous two-line block that competed with the surrounding cards.
+// VisibilityEditor lets only the runtime owner flip public↔private. Workspace
+// owner/admin roles do not get visibility or edit access to another member's
+// runtime. The PATCH endpoint also re-checks; this is a UI gate, not a
+// security boundary. Per-choice description text lives in the hover tooltip so
+// the two buttons stay a tight icon+label pair instead of the previous
+// two-line block that competed with the surrounding cards.
 function VisibilityEditor({ runtime }: { runtime: AgentRuntime }) {
   const { t } = useT("runtimes");
   const wsId = useWorkspaceId();

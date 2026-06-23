@@ -57,27 +57,29 @@ DELETE FROM runtime_profile
 WHERE id = $1 AND workspace_id = $2;
 
 -- name: DeleteAgentRuntimesByProfile :many
--- Application-layer cascade: migration 120 dropped the DB ON DELETE CASCADE, so
--- the profile-delete path must remove the profile's registered runtime
--- instances itself. Returns the deleted rows so the caller can broadcast /
--- audit. Runs inside the same transaction as DeleteRuntimeProfile.
+-- Legacy maintenance helper only. Do not call this from DeleteRuntimeProfile:
+-- runtime rows are owner-only resources, and workspace admins must not delete
+-- other members' registered runtime instances by deleting a shared profile.
 DELETE FROM agent_runtime
 WHERE profile_id = $1
 RETURNING id, workspace_id, owner_id, daemon_id, provider;
 
 -- name: CountAgentsByProfile :one
--- Counts active (non-archived) agents bound to any runtime instance of this
--- profile. The profile-delete path uses this to refuse deletion (409) while
--- agents still depend on it, mirroring the runtime-delete guard.
+-- Counts active (non-archived) agents that require this profile. New agents
+-- store the dependency directly on agent.runtime_profile_id; the legacy
+-- runtime_id join is retained only for old rows created before runtime
+-- capability resolution.
 SELECT count(*) FROM agent a
-JOIN agent_runtime ar ON ar.id = a.runtime_id
-WHERE ar.profile_id = $1 AND a.archived_at IS NULL;
+LEFT JOIN agent_runtime ar ON ar.id = a.runtime_id
+WHERE a.archived_at IS NULL
+  AND (
+      a.runtime_profile_id = $1
+      OR ar.profile_id = $1
+  );
 
 -- name: ListAgentRuntimeIDsByProfile :many
--- Enumerates the runtime instance rows registered against a profile. The
--- profile-delete cascade walks these so it can run the same archived-agent /
--- archived-squad / autopilot teardown the runtime-delete path uses before
--- removing each runtime row — agent.runtime_id is ON DELETE RESTRICT, so a
--- bare delete would 500 whenever an archived agent still references the row.
+-- Enumerates private runtime instance rows registered against a profile.
+-- DeleteRuntimeProfile uses this only as a conflict guard; the runtime rows
+-- themselves must be deleted by their owners through the runtime delete path.
 SELECT id FROM agent_runtime
 WHERE profile_id = $1;

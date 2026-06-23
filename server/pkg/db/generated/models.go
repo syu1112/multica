@@ -44,6 +44,8 @@ type Agent struct {
 	McpConfig          []byte             `json:"mcp_config"`
 	Model              pgtype.Text        `json:"model"`
 	ThinkingLevel      pgtype.Text        `json:"thinking_level"`
+	RuntimeProvider    string             `json:"runtime_provider"`
+	RuntimeProfileID   pgtype.UUID        `json:"runtime_profile_id"`
 }
 
 type AgentRuntime struct {

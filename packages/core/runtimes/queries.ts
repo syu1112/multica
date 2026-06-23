@@ -48,9 +48,9 @@ export function runtimeUsageByHourOptions(runtimeId: string, days: number, tz: s
   });
 }
 
-export function runtimeListOptions(wsId: string, owner?: "me") {
+export function runtimeListOptions(wsId: string, owner: "me" = "me") {
   return queryOptions({
-    queryKey: owner === "me" ? runtimeKeys.listMine(wsId) : runtimeKeys.list(wsId),
+    queryKey: runtimeKeys.listMine(wsId),
     queryFn: () => api.listRuntimes({ workspace_id: wsId, owner }),
   });
 }

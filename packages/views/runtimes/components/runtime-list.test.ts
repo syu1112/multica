@@ -7,6 +7,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     id: "agent-1",
     workspace_id: "ws-1",
     runtime_id: "runtime-1",
+    runtime_provider: "codex",
+    runtime_profile_id: null,
     name: "Agent",
     description: "",
     instructions: "",
@@ -48,24 +50,16 @@ function makeTask(overrides: Partial<AgentTask> = {}): AgentTask {
 }
 
 describe("buildWorkloadIndex", () => {
-  it("excludes archived agents from runtime agent counts and workload", () => {
-    const activeAgent = makeAgent({ id: "active-agent" });
-    const archivedAgent = makeAgent({
-      id: "archived-agent",
-      archived_at: "2026-01-02T00:00:00Z",
+  it("does not infer per-runtime agents or workload from legacy agent runtime bindings", () => {
+    const legacyBoundAgent = makeAgent({ id: "legacy-agent" });
+    const task = makeTask({
+      id: "legacy-task",
+      agent_id: legacyBoundAgent.id,
+      status: "running",
     });
 
-    const tasks = [
-      makeTask({ id: "active-task", agent_id: activeAgent.id, status: "running" }),
-      makeTask({ id: "archived-task", agent_id: archivedAgent.id, status: "queued" }),
-    ];
+    const workload = buildWorkloadIndex([legacyBoundAgent], [task]);
 
-    const workload = buildWorkloadIndex([activeAgent, archivedAgent], tasks).get("runtime-1");
-
-    expect(workload).toEqual({
-      agentIds: [activeAgent.id],
-      runningCount: 1,
-      queuedCount: 0,
-    });
+    expect(workload.size).toBe(0);
   });
 });

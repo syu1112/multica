@@ -497,7 +497,8 @@ export function RuntimeLocalSkillImportPanel({
       runtimes.filter(
         (r) =>
           r.runtime_mode === "local" &&
-          (userId == null || r.owner_id === userId),
+          userId != null &&
+          r.owner_id === userId,
       ),
     [runtimes, userId],
   );
@@ -518,7 +519,12 @@ export function RuntimeLocalSkillImportPanel({
   const busy = importing || resolvingConflicts;
 
   useEffect(() => {
-    setSelectedRuntimeId((prev) => prev || localRuntimes[0]?.id || "");
+    setSelectedRuntimeId((prev) => {
+      if (prev && localRuntimes.some((runtime) => runtime.id === prev)) {
+        return prev;
+      }
+      return localRuntimes[0]?.id || "";
+    });
   }, [localRuntimes]);
 
   useEffect(() => {

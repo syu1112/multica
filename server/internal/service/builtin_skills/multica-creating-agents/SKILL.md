@@ -23,9 +23,12 @@ multica agent skills list <agent-id> --output json   # current skill bindings
 multica agent env get <agent-id> --output json  # plaintext env (owner/admin only, agents denied)
 ```
 
-`agent get` returns the persisted agent including `runtime_id`, `model`,
-`thinking_level`, `custom_args`, `has_custom_env`, `custom_env_key_count`, and
-`skills`. It never returns plaintext `custom_env`.
+`agent get` returns the persisted agent capability fields including
+`runtime_provider`, `runtime_profile_id`, `model`, `thinking_level`,
+`custom_args`, `has_custom_env`, `custom_env_key_count`, and `skills`. The
+legacy `runtime_id` field remains on the wire for compatibility but is `null`
+in user-facing responses; concrete runtime IDs are private execution resources,
+not agent metadata. It never returns plaintext `custom_env`.
 
 ## Core model
 
@@ -46,10 +49,10 @@ Two distinct text fields, often confused:
 
 ## CLI / API entry points
 
-Minimum create call (`--name` and `--runtime-id` are both required):
+Minimum create call (`--name` and a runtime capability are required):
 
 ```bash
-multica agent create --name <name> --runtime-id <runtime-id> \
+multica agent create --name <name> --runtime-provider <provider> \
   --description "<short catalog summary>" \
   --instructions "<runtime behavior contract>" \
   --output json
@@ -62,8 +65,9 @@ non-empty value, the rest (`runtime-config`, `custom-args`, `model`,
 flags fall through to server defaults rather than sending empty strings.
 
 The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
-`instructions`, `runtime_id`, `runtime_config`, `custom_env`, `custom_args`,
-`model`, `thinking_level`, `visibility`, `max_concurrent_tasks`, `mcp_config`.
+`instructions`, `runtime_provider`, optional `runtime_profile_id`, legacy
+`runtime_id`, `runtime_config`, `custom_env`, `custom_args`, `model`,
+`thinking_level`, `visibility`, `max_concurrent_tasks`, `mcp_config`.
 
 ## Field contracts
 
@@ -72,7 +76,9 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
 | `name` | `agent.name` | required, 400 if empty | listings, runtime payload |
 | `description` | `agent.description` | 400 if > 255 code points | catalog/listing only — NOT the runtime prompt |
 | `instructions` | `agent.instructions` | none | daemon → provider at claim time |
-| `runtime_id` | `agent.runtime_id` | required (400) + must resolve to a runtime in this workspace | selects runtime/provider |
+| `runtime_provider` | `agent.runtime_provider` | required unless legacy `runtime_id` supplies it | runtime capability requirement |
+| `runtime_profile_id` | `agent.runtime_profile_id` | optional; must resolve in workspace | custom runtime capability requirement |
+| `runtime_id` | `agent.runtime_id` (nullable) | legacy compatibility only; must be owned by caller if supplied | converted to provider/profile; not persisted as a new binding; new agents return `null` |
 | `model` | `agent.model` (nullable) | none beyond runtime support | daemon reads; empty = runtime default |
 | `thinking_level` | `agent.thinking_level` (nullable) | provider-level enum; unknown literal → 400 | daemon; empty = runtime default |
 | `custom_args` | `agent.custom_args` (JSON array) | JSON shape checked CLI-side; server stores as-is | daemon (extra CLI switches); defaults to `[]` |
@@ -117,8 +123,8 @@ handler inspects `custom_args` for a model flag.
 secrets out of shell history and the process list:
 
 ```bash
-multica agent create --name <name> --runtime-id <runtime-id> --custom-env-stdin --output json
-multica agent create --name <name> --runtime-id <runtime-id> --custom-env-file <0600-json> --output json
+multica agent create --name <name> --runtime-provider <provider> --custom-env-stdin --output json
+multica agent create --name <name> --runtime-provider <provider> --custom-env-file <0600-json> --output json
 ```
 
 `--custom-env-stdin` reads the JSON object from stdin; `--custom-env-file`
@@ -149,7 +155,7 @@ API tokens — and offers the same three input channels as `custom_env`, on BOTH
 `agent create` and `agent update`:
 
 ```bash
-multica agent create --name <name> --runtime-id <runtime-id> --mcp-config-file <0600-json> --output json
+multica agent create --name <name> --runtime-provider <provider> --mcp-config-file <0600-json> --output json
 multica agent update <agent-id> --mcp-config-stdin --output json
 multica agent update <agent-id> --mcp-config 'null'   # clears the config
 ```

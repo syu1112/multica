@@ -55,6 +55,15 @@ func cleanupRerunFixture(t *testing.T, issueID string) {
 	testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 }
 
+func runtimeOwnerForRerunTest(t *testing.T, runtimeID string) pgtype.UUID {
+	t.Helper()
+	var ownerID pgtype.UUID
+	if err := testPool.QueryRow(context.Background(), `SELECT owner_id FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&ownerID); err != nil {
+		t.Fatalf("load runtime owner: %v", err)
+	}
+	return ownerID
+}
+
 // TestGetLastTaskSessionExcludesPoisonedFailures asserts that the
 // (agent_id, issue_id) resume lookup skips failed tasks whose
 // failure_reason classifies them as poisoned terminal output. This is the
@@ -397,7 +406,7 @@ func TestRerunIssueSetsForceFreshSession(t *testing.T) {
 		t.Skip("no database connection")
 	}
 
-	issueID, _, _ := setupRerunTestFixture(t)
+	issueID, _, runtimeID := setupRerunTestFixture(t)
 	t.Cleanup(func() { cleanupRerunFixture(t, issueID) })
 
 	ctx := context.Background()
@@ -407,7 +416,7 @@ func TestRerunIssueSetsForceFreshSession(t *testing.T) {
 	bus := events.New()
 	taskService := service.NewTaskService(queries, nil, hub, bus)
 
-	task, err := taskService.RerunIssue(ctx, pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true}, pgtype.UUID{}, pgtype.UUID{})
+	task, err := taskService.RerunIssue(ctx, pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true}, runtimeOwnerForRerunTest(t, runtimeID), pgtype.UUID{}, pgtype.UUID{})
 	if err != nil {
 		t.Fatalf("RerunIssue failed: %v", err)
 	}
@@ -444,10 +453,10 @@ func TestRerunIssueTargetsSourceTaskAgent(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id
+			runtime_id, runtime_provider, runtime_profile_id, visibility, max_concurrent_tasks, owner_id
 		)
-		SELECT a.workspace_id, 'Rerun Secondary Agent', '', 'cloud', '{}'::jsonb,
-		       a.runtime_id, 'workspace', 1, a.owner_id
+		SELECT a.workspace_id, 'Rerun Secondary Agent', '', a.runtime_mode, '{}'::jsonb,
+		       a.runtime_id, a.runtime_provider, a.runtime_profile_id, 'workspace', 1, a.owner_id
 		FROM agent a WHERE a.id = $1
 		RETURNING id
 	`, primaryAgentID).Scan(&secondaryAgentID); err != nil {
@@ -480,6 +489,7 @@ func TestRerunIssueTargetsSourceTaskAgent(t *testing.T) {
 	task, err := taskService.RerunIssue(
 		ctx,
 		pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		runtimeOwnerForRerunTest(t, runtimeID),
 		pgtype.UUID{Bytes: parseUUIDBytes(sourceTaskID), Valid: true},
 		pgtype.UUID{},
 	)
@@ -551,6 +561,7 @@ func TestRerunIssueRejectsCrossIssueTask(t *testing.T) {
 	_, err := taskService.RerunIssue(
 		ctx,
 		pgtype.UUID{Bytes: parseUUIDBytes(issueAID), Valid: true},
+		runtimeOwnerForRerunTest(t, runtimeID),
 		pgtype.UUID{Bytes: parseUUIDBytes(crossTaskID), Valid: true},
 		pgtype.UUID{},
 	)
@@ -614,6 +625,7 @@ func TestRerunIssueInheritsTriggerCommentFromSourceTask(t *testing.T) {
 	task, err := taskService.RerunIssue(
 		ctx,
 		pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		runtimeOwnerForRerunTest(t, runtimeID),
 		pgtype.UUID{Bytes: parseUUIDBytes(sourceTaskID), Valid: true},
 		pgtype.UUID{},
 	)
@@ -640,7 +652,7 @@ func TestEnqueueTaskForIssueDoesNotForceFreshSession(t *testing.T) {
 		t.Skip("no database connection")
 	}
 
-	issueID, _, _ := setupRerunTestFixture(t)
+	issueID, _, runtimeID := setupRerunTestFixture(t)
 	t.Cleanup(func() { cleanupRerunFixture(t, issueID) })
 
 	ctx := context.Background()
@@ -654,9 +666,10 @@ func TestEnqueueTaskForIssueDoesNotForceFreshSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load issue: %v", err)
 	}
-	task, err := taskService.EnqueueTaskForIssue(ctx, issue)
+
+	task, err := taskService.EnqueueTaskForIssueByRequester(ctx, issue, runtimeOwnerForRerunTest(t, runtimeID), pgtype.UUID{})
 	if err != nil {
-		t.Fatalf("EnqueueTaskForIssue failed: %v", err)
+		t.Fatalf("EnqueueTaskForIssueByRequester failed: %v", err)
 	}
 	if task.ForceFreshSession {
 		t.Fatal("expected normal enqueue to leave force_fresh_session=false")

@@ -229,8 +229,8 @@ func TestInitiateListLocalSkills_RequiresRuntimeOwner(t *testing.T) {
 	)
 
 	testHandler.InitiateListLocalSkills(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -258,8 +258,8 @@ func TestGetLocalSkillImportRequest_RequiresRuntimeOwner(t *testing.T) {
 	)
 
 	testHandler.GetLocalSkillImportRequest(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -374,6 +374,20 @@ func TestRuntimeLocalSkillImportFlow_EndToEnd(t *testing.T) {
 	}
 	if got := countSkillFiles(t, completed.Skill.ID); got != 1 {
 		t.Fatalf("expected 1 imported file, got %d", got)
+	}
+	config, ok := completed.Skill.Config.(map[string]any)
+	if !ok {
+		t.Fatalf("skill config = %T, want object", completed.Skill.Config)
+	}
+	origin, ok := config["origin"].(map[string]any)
+	if !ok {
+		t.Fatalf("skill origin = %T, want object", config["origin"])
+	}
+	if _, ok := origin["runtime_id"]; ok {
+		t.Fatalf("imported skill origin leaked runtime_id: %v", origin)
+	}
+	if origin["type"] != "runtime_local" || origin["provider"] != "claude" {
+		t.Fatalf("origin did not retain runtime provenance summary: %v", origin)
 	}
 }
 
