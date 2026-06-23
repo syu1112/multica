@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
@@ -87,12 +89,68 @@ func daemonSetupURLsFromEnv() (string, string) {
 	}
 
 	if serverURL == "" {
-		serverURL = appURL
+		serverURL = inferDaemonServerURL(appURL)
 	}
 	if isOfficialCloudDaemonConfig(appURL) {
 		return "", ""
 	}
 	return serverURL, appURL
+}
+
+// inferDaemonServerURL derives the backend server URL the daemon should talk
+// to when MULTICA_PUBLIC_URL is not set. The historical behavior assumed a
+// reverse-proxy / same-origin topology and reused the app URL verbatim. That
+// breaks the common self-hosted split-port topology where the frontend is
+// served on a non-default port (e.g. :3001) while the Go backend listens on
+// its own PORT (default 8080): the daemon command would point at the frontend
+// port and never reach /health or the WebSocket proxy. When the app URL
+// carries an explicit non-default port we therefore rebuild the URL with the
+// backend's listen port instead.
+//
+// Heuristic boundaries:
+//   - No explicit port, or the scheme's default port (http :80 / https :443)
+//     → same-origin; reuse the app URL verbatim (behavior unchanged).
+//   - Explicit non-default port → swap in the backend port from PORT env
+//     (the same single source of truth used in cmd/server/main.go), default
+//     8080. PORT must be a non-empty pure number in 1–65535 or it falls back
+//     to 8080. The scheme and host are preserved; the host is reassembled
+//     with net.JoinHostPort so IPv6 literals stay safe.
+//   - Parse failure (missing scheme/host) → fall back to the app URL verbatim
+//     so we are never worse than today.
+//
+// This is a heuristic for the common self-hosted topology. Non-standard setups
+// (PaaS-random PORT, custom reverse-proxy ports such as :8443) may infer
+// incorrectly; operators escape by setting MULTICA_PUBLIC_URL explicitly.
+func inferDaemonServerURL(appURL string) string {
+	u, err := url.Parse(appURL)
+	if err != nil || u.Scheme == "" || u.Hostname() == "" {
+		return appURL
+	}
+	port := u.Port()
+	if port == "" {
+		return appURL
+	}
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		return appURL
+	}
+	u.Host = net.JoinHostPort(u.Hostname(), backendListenPort())
+	return u.String()
+}
+
+// backendListenPort returns the port the Go backend listens on, mirroring the
+// resolution in cmd/server/main.go: PORT is the single source of truth and
+// defaults to 8080 when unset or invalid. A non-numeric or out-of-range value
+// falls back to the default rather than corrupting the constructed URL.
+func backendListenPort() string {
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		return "8080"
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "8080"
+	}
+	return port
 }
 
 func normalizePublicURL(raw string) string {

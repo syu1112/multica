@@ -104,6 +104,10 @@ func TestGetConfigIncludesRuntimeAuthConfig(t *testing.T) {
 	}
 }
 
+// TestGetConfigUsesAppURLForSameOriginDaemonSetup covers the reverse-proxy /
+// same-origin topology: the app URL has NO explicit port, so the daemon server
+// URL must equal the app URL verbatim (the backend is reached through the same
+// origin). This is the historical behavior and must not change.
 func TestGetConfigUsesAppURLForSameOriginDaemonSetup(t *testing.T) {
 	t.Setenv("MULTICA_APP_URL", "https://multica.internal.example/")
 
@@ -127,6 +131,9 @@ func TestGetConfigUsesAppURLForSameOriginDaemonSetup(t *testing.T) {
 	}
 }
 
+// TestGetConfigUsesFrontendOriginForSameOriginDaemonSetup covers the same
+// reverse-proxy / same-origin topology as above, sourced from the legacy
+// FRONTEND_ORIGIN env var when MULTICA_APP_URL is unset.
 func TestGetConfigUsesFrontendOriginForSameOriginDaemonSetup(t *testing.T) {
 	t.Setenv("MULTICA_APP_URL", "")
 	t.Setenv("FRONTEND_ORIGIN", "https://multica.internal.example/")
@@ -284,5 +291,95 @@ func TestGetConfigExposesWorkspaceCreationDisabled(t *testing.T) {
 	}
 	if !cfg.WorkspaceCreationDisabled {
 		t.Fatalf("workspace_creation_disabled: want true with env on, got false (body=%s)", w.Body.String())
+	}
+}
+
+// daemonSetupURLsFromEnv drives the "Add a computer" command shown in the
+// connect-remote dialog. When the self-hosted frontend is served on a
+// non-default port (e.g. :3001) while the Go backend listens on its own PORT
+// (default 8080), the daemon command must point at the backend port — not the
+// frontend port. These tests exercise the split-port topology directly against
+// the pure function so they stay hermetic (no DB / HTTP required) and immune
+// to CI-supplied env. PORT is explicitly reset in every case because CI may
+// inject its own PORT.
+
+func TestDaemonSetupURLsSplitPortDefaultsToBackend8080(t *testing.T) {
+	t.Setenv("MULTICA_PUBLIC_URL", "")
+	t.Setenv("MULTICA_APP_URL", "http://10.66.102.95:3001")
+	t.Setenv("FRONTEND_ORIGIN", "")
+	t.Setenv("PORT", "")
+
+	serverURL, appURL := daemonSetupURLsFromEnv()
+	if serverURL != "http://10.66.102.95:8080" {
+		t.Fatalf("daemon_server_url: want http://10.66.102.95:8080, got %q", serverURL)
+	}
+	if appURL != "http://10.66.102.95:3001" {
+		t.Fatalf("daemon_app_url: want http://10.66.102.95:3001, got %q", appURL)
+	}
+}
+
+func TestDaemonSetupURLsSplitPortHonorsPortEnv(t *testing.T) {
+	t.Setenv("MULTICA_PUBLIC_URL", "")
+	t.Setenv("MULTICA_APP_URL", "http://10.66.102.95:3001")
+	t.Setenv("FRONTEND_ORIGIN", "")
+	t.Setenv("PORT", "9000")
+
+	serverURL, appURL := daemonSetupURLsFromEnv()
+	if serverURL != "http://10.66.102.95:9000" {
+		t.Fatalf("daemon_server_url: want http://10.66.102.95:9000, got %q", serverURL)
+	}
+	if appURL != "http://10.66.102.95:3001" {
+		t.Fatalf("daemon_app_url: want http://10.66.102.95:3001, got %q", appURL)
+	}
+}
+
+// TestDaemonSetupURLsExplicitDefaultPortStaysSameOrigin guards the defensive
+// branch: an app URL that carries the scheme's default port (http :80 /
+// https :443) must NOT be rewritten to the backend port — it is same-origin.
+func TestDaemonSetupURLsExplicitDefaultPortStaysSameOrigin(t *testing.T) {
+	t.Setenv("MULTICA_PUBLIC_URL", "")
+	t.Setenv("MULTICA_APP_URL", "http://10.66.102.95:80")
+	t.Setenv("FRONTEND_ORIGIN", "")
+	t.Setenv("PORT", "9000")
+
+	serverURL, appURL := daemonSetupURLsFromEnv()
+	if serverURL != "http://10.66.102.95:80" {
+		t.Fatalf("daemon_server_url: want same-origin http://10.66.102.95:80, got %q", serverURL)
+	}
+	if appURL != "http://10.66.102.95:80" {
+		t.Fatalf("daemon_app_url: want http://10.66.102.95:80, got %q", appURL)
+	}
+}
+
+// TestDaemonSetupURLsInvalidPortFallsBackTo8080 ensures a malformed PORT env
+// (non-numeric / out of range) does not corrupt the constructed URL — it must
+// fall back to the default backend port 8080.
+func TestDaemonSetupURLsInvalidPortFallsBackTo8080(t *testing.T) {
+	t.Setenv("MULTICA_PUBLIC_URL", "")
+	t.Setenv("MULTICA_APP_URL", "http://10.66.102.95:3001")
+	t.Setenv("FRONTEND_ORIGIN", "")
+	t.Setenv("PORT", "abc")
+
+	serverURL, _ := daemonSetupURLsFromEnv()
+	if serverURL != "http://10.66.102.95:8080" {
+		t.Fatalf("daemon_server_url: want fallback http://10.66.102.95:8080, got %q", serverURL)
+	}
+}
+
+// TestDaemonSetupURLsPublicURLOverridesSplitPort confirms the explicit escape
+// hatch: when MULTICA_PUBLIC_URL is set it wins verbatim, regardless of the
+// app URL port topology.
+func TestDaemonSetupURLsPublicURLOverridesSplitPort(t *testing.T) {
+	t.Setenv("MULTICA_PUBLIC_URL", "https://api.internal.example:9443")
+	t.Setenv("MULTICA_APP_URL", "http://10.66.102.95:3001")
+	t.Setenv("FRONTEND_ORIGIN", "")
+	t.Setenv("PORT", "9000")
+
+	serverURL, appURL := daemonSetupURLsFromEnv()
+	if serverURL != "https://api.internal.example:9443" {
+		t.Fatalf("daemon_server_url: want MULTICA_PUBLIC_URL verbatim, got %q", serverURL)
+	}
+	if appURL != "http://10.66.102.95:3001" {
+		t.Fatalf("daemon_app_url: want http://10.66.102.95:3001, got %q", appURL)
 	}
 }
