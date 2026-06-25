@@ -65,6 +65,17 @@ const mockRuntimesData = vi.hoisted(() => ({
     owner_id: string;
   }>,
 }));
+const mockSquadsData = vi.hoisted(() => ({
+  list: [{
+    id: "squad-1",
+    name: "Squad Alpha",
+    leader_id: "agent-1",
+  }] as Array<{
+    id: string;
+    name: string;
+    leader_id: string;
+  }>,
+}));
 
 const mockDraftStore = {
   draft: {
@@ -130,6 +141,10 @@ vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: () => ({
     queryKey: ["agents"],
     queryFn: () => Promise.resolve(mockAgentsData.list),
+  }),
+  squadListOptions: () => ({
+    queryKey: ["squads"],
+    queryFn: () => Promise.resolve(mockSquadsData.list),
   }),
 }));
 
@@ -897,7 +912,159 @@ describe("CreateIssueModal", () => {
   });
 });
 
-describe("manualCreateSubmitDisabled", () => {
+
+describe("squad runtime selector", () => {
+  beforeEach(() => {
+    mockRuntimesData.list = [
+      {
+        id: "runtime-1",
+        name: "Runtime One",
+        runtime_mode: "local",
+        provider: "codex",
+        profile_id: null,
+        status: "online",
+        owner_id: "user-1",
+      },
+    ];
+    mockDraftStore.draft.title = "";
+    mockDraftStore.draft.description = "";
+    mockDraftStore.draft.startDate = null;
+    mockDraftStore.draft.dueDate = null;
+  });
+  it("shows runtime dropdown when squad has compatible leader agent runtimes", async () => {
+    mockDraftStore.draft.assigneeType = "squad";
+    mockDraftStore.draft.assigneeId = "squad-1";
+
+
+    expect(mockSquadsData.list[0]!.leader_id).toBe("agent-1");    renderModal(
+      <ManualCreatePanel
+        onClose={vi.fn()}
+        onSwitchMode={vi.fn()}
+        isExpanded={false}
+        setIsExpanded={vi.fn()}
+        backlogHintIssueId={null}
+        setBacklogHintIssueId={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      const select = screen.getByRole("combobox");
+      expect(select).toBeInTheDocument();
+      expect(select).toHaveValue("runtime-1");
+      expect(screen.getByText("Runtime One")).toBeInTheDocument();
+    });
+  });
+
+  it("hides runtime dropdown and disables submit when squad has no compatible runtimes", async () => {
+    mockDraftStore.draft.assigneeType = "squad";
+    mockDraftStore.draft.assigneeId = "squad-1";
+    mockRuntimesData.list = [];
+    const user = userEvent.setup();
+
+    renderModal(
+      <ManualCreatePanel
+        onClose={vi.fn()}
+        onSwitchMode={vi.fn()}
+        isExpanded={false}
+        setIsExpanded={vi.fn()}
+        backlogHintIssueId={null}
+        setBacklogHintIssueId={vi.fn()}
+      />,
+    );
+
+    await user.type(screen.getByPlaceholderText("Issue title"), "Squad issue");
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    const submitBtn = screen.getByRole("button", { name: "Create Issue" });
+    expect(submitBtn).toBeDisabled();
+  });
+
+  it("submits with default selected runtime_id when squad is assigned", async () => {
+    const user = userEvent.setup();
+    mockDraftStore.draft.assigneeType = "squad";
+    mockDraftStore.draft.assigneeId = "squad-1";
+
+    renderModal(
+      <ManualCreatePanel
+        onClose={vi.fn()}
+        onSwitchMode={vi.fn()}
+        isExpanded={false}
+        setIsExpanded={vi.fn()}
+        backlogHintIssueId={null}
+        setBacklogHintIssueId={vi.fn()}
+      />,
+    );
+
+    await user.type(screen.getByPlaceholderText("Issue title"), "Squad issue with runtime");
+
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+
+    await waitFor(() => {
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          assignee_type: "squad",
+          assignee_id: "squad-1",
+          runtime_id: "runtime-1",
+        }),
+      );
+    });
+  });
+
+  it("submits with manually selected runtime when squad is assigned", async () => {
+    const user = userEvent.setup();
+    mockDraftStore.draft.assigneeType = "squad";
+    mockDraftStore.draft.assigneeId = "squad-1";
+    mockRuntimesData.list = [
+      {
+        id: "runtime-1",
+        name: "Runtime One",
+        runtime_mode: "local",
+        provider: "codex",
+        profile_id: null,
+        status: "online",
+        owner_id: "user-1",
+      },
+      {
+        id: "runtime-2",
+        name: "Runtime Two",
+        runtime_mode: "local",
+        provider: "codex",
+        profile_id: null,
+        status: "online",
+        owner_id: "user-1",
+      },
+    ];
+
+    renderModal(
+      <ManualCreatePanel
+        onClose={vi.fn()}
+        onSwitchMode={vi.fn()}
+        isExpanded={false}
+        setIsExpanded={vi.fn()}
+        backlogHintIssueId={null}
+        setBacklogHintIssueId={vi.fn()}
+      />,
+    );
+
+    await user.type(screen.getByPlaceholderText("Issue title"), "Squad with manual runtime");
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox")).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "runtime-2" } });
+
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+
+    await waitFor(() => {
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          assignee_type: "squad",
+          assignee_id: "squad-1",
+          runtime_id: "runtime-2",
+        }),
+      );
+    });
+  });
+});describe("manualCreateSubmitDisabled", () => {
   it("blocks agent-assigned issue creation until a compatible runtime is selected", () => {
     expect(
       manualCreateSubmitDisabled({

@@ -1,4 +1,4 @@
-import type { Issue, IssueMetadata, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue";
+﻿import type { Issue, IssueMetadata, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue";
 import type { MemberRole } from "./workspace";
 import type { Project } from "./project";
 
@@ -10,7 +10,7 @@ export interface CreateIssueRequest {
   priority?: IssuePriority;
   assignee_type?: IssueAssigneeType;
   assignee_id?: string;
-  /** Per-run runtime selection for agent assignees. Must be owned by requester. */
+  /** Per-run runtime selection for agent / squad assignees (squad path resolves via leader agent). Must be owned by requester. */
   runtime_id?: string;
   parent_issue_id?: string;
   project_id?: string;
@@ -26,7 +26,7 @@ export interface UpdateIssueRequest {
   priority?: IssuePriority;
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
-  /** Per-run runtime selection for agent assignees. Must be owned by requester. */
+  /** Per-run runtime selection for agent / squad assignees (squad path resolves via leader agent). Must be owned by requester. */
   runtime_id?: string | null;
   position?: number;
   start_date?: string | null;
@@ -51,7 +51,7 @@ export interface ListIssuesParams {
   project_id?: string;
   /**
    * Widen the assignee filter to issues where the user is the *indirect*
-   * assignee — assignee is one of the user's owned agents, or a squad that
+   * assignee 鈥?assignee is one of the user's owned agents, or a squad that
    * involves the user (human member / leader-via-owned-agent / agent member
    * owned by the user). Direct member assignment is intentionally excluded:
    * `involves_user_id` and `assignee_id=<user>` (tab "Assigned to me") produce
@@ -92,7 +92,7 @@ export interface ListGroupedIssuesParams {
   assignee_ids?: string[];
   creator_id?: string;
   project_id?: string;
-  /** See `ListIssuesParams.involves_user_id` — same semantics. */
+  /** See `ListIssuesParams.involves_user_id` 鈥?same semantics. */
   involves_user_id?: string;
   /** JSONB containment filter on `issue.metadata`. AND across keys. */
   metadata?: IssueMetadata;

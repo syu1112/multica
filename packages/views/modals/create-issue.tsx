@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -47,7 +47,7 @@ import { useCreateModeStore } from "@multica/core/issues/stores/create-mode-stor
 import { useQuickCreateStore } from "@multica/core/issues/stores/quick-create-store";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
-import { agentListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { useCreateIssue, useUpdateIssue } from "@multica/core/issues/mutations";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import {
@@ -84,7 +84,7 @@ export function manualCreateSubmitDisabled({
   assigneeType: IssueAssigneeType | undefined;
   selectedRuntimeId: string;
 }) {
-  return !hasTitle || submitting || (assigneeType === "agent" && !selectedRuntimeId);
+  return !hasTitle || submitting || ((assigneeType === "agent" || assigneeType === "squad") && !selectedRuntimeId);
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +173,7 @@ export function ManualCreatePanel({
   const wsId = useWorkspaceId();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: squads = [] } = useQuery(squadListOptions(wsId));
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: parentIssue } = useQuery({
     ...issueDetailOptions(wsId, parentIssueId ?? ""),
@@ -224,26 +225,34 @@ export function ManualCreatePanel({
 
   const createIssueMutation = useCreateIssue();
   const updateIssueMutation = useUpdateIssue();
-  const selectedAgent = useMemo(
-    () =>
-      assigneeType === "agent" && assigneeId
-        ? agents.find((agent) => agent.id === assigneeId)
-        : undefined,
-    [agents, assigneeId, assigneeType],
+  const selectedAgentForRuntime = useMemo(
+    () => {
+      if (assigneeType === "agent" && assigneeId) {
+        return agents.find((agent) => agent.id === assigneeId);
+      }
+      if (assigneeType === "squad" && assigneeId) {
+        const squad = squads.find((s) => s.id === assigneeId);
+        if (squad) {
+          return agents.find((agent) => agent.id === squad.leader_id);
+        }
+      }
+      return undefined;
+    },
+    [agents, squads, assigneeId, assigneeType],
   );
   const compatibleRuntimes = useMemo(() => {
-    if (!selectedAgent) return [];
+    if (!selectedAgentForRuntime) return [];
     return runtimes.filter(
       (runtime) =>
-        firstCompatibleRuntimeForAgent(selectedAgent, [runtime], {
+        firstCompatibleRuntimeForAgent(selectedAgentForRuntime, [runtime], {
           ownerId: currentUserId,
           onlineOnly: true,
         }) !== null,
     );
-  }, [currentUserId, runtimes, selectedAgent]);
+  }, [currentUserId, runtimes, selectedAgentForRuntime]);
   const [selectedRuntimeId, setSelectedRuntimeId] = useState<string>("");
   useEffect(() => {
-    if (assigneeType !== "agent") {
+    if (assigneeType !== "agent" && assigneeType !== "squad") {
       if (selectedRuntimeId) setSelectedRuntimeId("");
       return;
     }
@@ -297,7 +306,7 @@ export function ManualCreatePanel({
         assignee_type: assigneeType,
         assignee_id: assigneeId,
         runtime_id:
-          assigneeType === "agent" && selectedRuntimeId
+          (assigneeType === "agent" || assigneeType === "squad") && selectedRuntimeId
             ? selectedRuntimeId
             : undefined,
         start_date: startDate || undefined,
@@ -613,7 +622,7 @@ export function ManualCreatePanel({
                 align="start"
               />
 
-              {assigneeType === "agent" && compatibleRuntimes.length > 0 && (
+              {(assigneeType === "agent" || assigneeType === "squad") && compatibleRuntimes.length > 0 && (
                 <select
                   value={selectedRuntimeId}
                   onChange={(event) => setSelectedRuntimeId(event.target.value)}
@@ -831,7 +840,7 @@ export function ManualCreatePanel({
                       selectedRuntimeId,
                     })}
                     title={
-                      assigneeType === "agent" && !selectedRuntimeId
+                      (assigneeType === "agent" || assigneeType === "squad") && !selectedRuntimeId
                         ? t(($) => $.create_issue.agent.runtime_blocked_tooltip)
                         : undefined
                     }

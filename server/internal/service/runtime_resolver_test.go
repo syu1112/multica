@@ -219,3 +219,117 @@ func TestQuickCreateRuntimeVersionGate(t *testing.T) {
 		t.Fatal("MinVersion is empty")
 	}
 }
+func TestRuntimeResolverExplicitChoiceUsesAgentOwnerForSquad(t *testing.T) {
+	workspaceID := testUUID(1)
+	requesterID := testUUID(2)     // 用户 A（issue 创建者）
+	agentOwnerID := testUUID(3)    // 用户 B（squad leader agent 的 owner）
+	squadLeaderRuntimeID := testUUID(4) // 用户 B 的运行时
+
+	resolver := RuntimeResolver{
+		GetRuntime: func(ctx context.Context, id pgtype.UUID) (db.AgentRuntime, error) {
+			if id != squadLeaderRuntimeID {
+				t.Fatalf("runtime lookup = %v, want %v", id, squadLeaderRuntimeID)
+			}
+			return db.AgentRuntime{
+				ID:          squadLeaderRuntimeID,
+				WorkspaceID: workspaceID,
+				OwnerID:     agentOwnerID, // 运行时属于 B
+				RuntimeMode: "local",
+				Provider:    "codex",
+				Status:      "online",
+			}, nil
+		},
+	}
+
+	// 用户 A 创建 issue 分配给 squad leader B，选择 B 的运行时
+	// AgentOwnerID=B 应当允许该选择，尽管 RequesterUserID=A ≠ B
+	runtime, err := resolver.Resolve(context.Background(), RuntimeResolveInput{
+		WorkspaceID:         workspaceID,
+		Agent:               db.Agent{RuntimeProvider: "codex"},
+		RequesterUserID:     requesterID,
+		AgentOwnerID:        agentOwnerID, // squad leader agent 的 owner = B
+		ExplicitRuntimeID:   squadLeaderRuntimeID,
+		AllowExplicitChoice: true,
+	})
+	if err != nil {
+		t.Fatalf("Resolve returned error for squad leader runtime selection: %v", err)
+	}
+	if runtime.ID != squadLeaderRuntimeID {
+		t.Fatalf("resolved runtime = %v, want squad leader runtime %v", runtime.ID, squadLeaderRuntimeID)
+	}
+}
+
+func TestRuntimeResolverRejectsExplicitChoiceWhenAgentOwnerMismatch(t *testing.T) {
+	workspaceID := testUUID(1)
+	requesterID := testUUID(2)
+	agentOwnerID := testUUID(3)       // agent owner = B
+	otherUserID := testUUID(4)        // 用户 C
+	otherRuntimeID := testUUID(5)     // C 的运行时
+
+	resolver := RuntimeResolver{
+		GetRuntime: func(ctx context.Context, id pgtype.UUID) (db.AgentRuntime, error) {
+			if id != otherRuntimeID {
+				t.Fatalf("runtime lookup = %v, want %v", id, otherRuntimeID)
+			}
+			return db.AgentRuntime{
+				ID:          otherRuntimeID,
+				WorkspaceID: workspaceID,
+				OwnerID:     otherUserID, // 运行时属于 C
+				RuntimeMode: "local",
+				Provider:    "codex",
+				Status:      "online",
+			}, nil
+		},
+	}
+
+	// 设置 AgentOwnerID=B，但运行时属于 C（既不是 A 也不是 B）
+	_, err := resolver.Resolve(context.Background(), RuntimeResolveInput{
+		WorkspaceID:         workspaceID,
+		Agent:               db.Agent{RuntimeProvider: "codex"},
+		RequesterUserID:     requesterID,
+		AgentOwnerID:        agentOwnerID,
+		ExplicitRuntimeID:   otherRuntimeID,
+		AllowExplicitChoice: true,
+	})
+	if !errors.Is(err, ErrRuntimeNotFound) {
+		t.Fatalf("Resolve error = %v, want ErrRuntimeNotFound (runtime belongs to neither requester nor agent owner)", err)
+	}
+}
+
+func TestRuntimeResolverExplicitChoiceFallsBackToRequesterWhenNoAgentOwner(t *testing.T) {
+	workspaceID := testUUID(1)
+	requesterID := testUUID(2)
+	requesterRuntimeID := testUUID(3)
+
+	resolver := RuntimeResolver{
+		GetRuntime: func(ctx context.Context, id pgtype.UUID) (db.AgentRuntime, error) {
+			if id != requesterRuntimeID {
+				t.Fatalf("runtime lookup = %v, want %v", id, requesterRuntimeID)
+			}
+			return db.AgentRuntime{
+				ID:          requesterRuntimeID,
+				WorkspaceID: workspaceID,
+				OwnerID:     requesterID, // 运行时属于 requester
+				RuntimeMode: "local",
+				Provider:    "codex",
+				Status:      "online",
+			}, nil
+		},
+	}
+
+	// 非 squad 场景：AgentOwnerID 未设置，应使用 RequesterUserID 校验
+	runtime, err := resolver.Resolve(context.Background(), RuntimeResolveInput{
+		WorkspaceID:         workspaceID,
+		Agent:               db.Agent{RuntimeProvider: "codex"},
+		RequesterUserID:     requesterID,
+		// AgentOwnerID: 留空（零值）
+		ExplicitRuntimeID:   requesterRuntimeID,
+		AllowExplicitChoice: true,
+	})
+	if err != nil {
+		t.Fatalf("Resolve returned error for requester's own runtime: %v", err)
+	}
+	if runtime.ID != requesterRuntimeID {
+		t.Fatalf("resolved runtime = %v, want requester runtime %v", runtime.ID, requesterRuntimeID)
+	}
+}
