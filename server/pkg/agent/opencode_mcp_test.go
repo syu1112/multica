@@ -402,7 +402,7 @@ func TestBuildOpenCodeMCPConfigContent_RejectsMalformedClaudeStyle(t *testing.T)
 func TestOpencodeBackendInjectsMCPConfigViaEnv(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
-	fakePath := filepath.Join(tempDir, "opencode")
+	fakePath := testExecutablePath(tempDir, "opencode")
 	captureFile := filepath.Join(tempDir, "env-capture.txt")
 	writeTestExecutable(t, fakePath, []byte(fakeOpencodeScriptCapturingEnv()))
 
@@ -462,7 +462,7 @@ func TestOpencodeBackendInjectsMCPConfigViaEnv(t *testing.T) {
 func TestOpencodeBackendOmitsMCPEnvWhenEmpty(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
-	fakePath := filepath.Join(tempDir, "opencode")
+	fakePath := testExecutablePath(tempDir, "opencode")
 	captureFile := filepath.Join(tempDir, "env-capture.txt")
 	writeTestExecutable(t, fakePath, []byte(fakeOpencodeScriptCapturingEnv()))
 
@@ -512,7 +512,7 @@ func TestOpencodeBackendOmitsMCPEnvWhenEmpty(t *testing.T) {
 func TestOpencodeBackendOverridesUserOpenCodeConfigContent(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
-	fakePath := filepath.Join(tempDir, "opencode")
+	fakePath := testExecutablePath(tempDir, "opencode")
 	captureFile := filepath.Join(tempDir, "env-capture.txt")
 	writeTestExecutable(t, fakePath, []byte(fakeOpencodeScriptCapturingEnv()))
 

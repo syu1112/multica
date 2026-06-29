@@ -207,7 +207,7 @@ const { ApiError } = vi.hoisted(() => {
 vi.mock("@multica/core/api", async () => {
   // Pull real `parseWithFallback` + `DuplicateIssueErrorBodySchema` from the
   // schema modules so the drift-fallback branch in create-issue.tsx runs the
-  // actual validation logic (not a stub). Only `ApiError` is local — the
+  // actual validation logic (not a stub). Only `ApiError` is local -the
   // component imports it from this module and the cross-realm `instanceof`
   // check requires a single class identity.
   const { parseWithFallback } = await vi.importActual<typeof import("@multica/core/api/schema")>(
@@ -474,6 +474,12 @@ describe("CreateIssueModal", () => {
     });
   });
 
+  it("does not show the switch-to-agent action in manual create", () => {
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: /Switch to Agent/i })).not.toBeInTheDocument();
+  });
+
   it("shows success feedback with a direct path to the new issue", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
@@ -668,39 +674,7 @@ describe("CreateIssueModal", () => {
     });
   });
 
-  // Manual → agent must also forward the picked squad. Without this branch
-  // the agent panel silently falls back to the persisted actor / first
-  // visible agent and the user loses the squad they just chose in manual.
-  it("forwards the picked squad when switching to agent mode", async () => {
-    mockDraftStore.draft.assigneeType = "squad";
-    mockDraftStore.draft.assigneeId = "squad-1";
-    const user = userEvent.setup();
-    const onSwitchMode = vi.fn();
 
-    renderModal(
-      <ManualCreatePanel
-        onClose={vi.fn()}
-        onSwitchMode={onSwitchMode}
-        isExpanded={false}
-        setIsExpanded={vi.fn()}
-        backlogHintIssueId={null}
-        setBacklogHintIssueId={vi.fn()}
-      />,
-    );
-
-    await user.type(screen.getByPlaceholderText("Issue title"), "Refactor auth");
-    await user.click(screen.getByRole("button", { name: /Switch to Agent/i }));
-
-    expect(onSwitchMode).toHaveBeenCalledTimes(1);
-    const carry = onSwitchMode.mock.calls[0]?.[0];
-    expect(carry).toEqual(
-      expect.objectContaining({ prompt: "Refactor auth", squad_id: "squad-1" }),
-    );
-    expect(carry).not.toHaveProperty("agent_id");
-  });
-
-  // Manual → agent must forward the picked project so the new modal pins to
-  // the same target. Without this the agent panel re-seeds from its own
   // persisted `lastProjectId` and silently routes the issue to a stale one.
   // Reporter scenario: backend rejects same-titled create with a 409 +
   // structured duplicate body. The user should land on a duplicate toast
@@ -709,9 +683,9 @@ describe("CreateIssueModal", () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     mockCreateIssue.mockRejectedValue(
-      new ApiError("An active issue with this title already exists: MUL-7 – Login bug", 409, "Conflict", {
+      new ApiError("An active issue with this title already exists: MUL-7 -Login bug", 409, "Conflict", {
         code: "active_duplicate_issue",
-        error: "An active issue with this title already exists: MUL-7 – Login bug",
+        error: "An active issue with this title already exists: MUL-7 -Login bug",
         issue: {
           id: "issue-dup",
           identifier: "MUL-7",
@@ -743,7 +717,7 @@ describe("CreateIssueModal", () => {
 
   // Schema drift safety: server returns a 409 with a body that doesn't match
   // the duplicate schema (renamed code, missing issue object, etc.). UI must
-  // not throw — it must fall back to a normal error toast carrying the
+  // not throw -it must fall back to a normal error toast carrying the
   // backend message so the user still sees a useful reason.
   it("falls back to a normal error toast when a 409 body does not match the duplicate schema", async () => {
     const user = userEvent.setup();
@@ -790,81 +764,12 @@ describe("CreateIssueModal", () => {
     expect(mockToastError).toHaveBeenCalledWith("Failed to create issue");
   });
 
-  it("forwards the picked project when switching to agent mode", async () => {
-    const user = userEvent.setup();
-    const onSwitchMode = vi.fn();
 
-    renderModal(
-      <ManualCreatePanel
-        onClose={vi.fn()}
-        onSwitchMode={onSwitchMode}
-        data={{ project_id: "proj-1" }}
-        isExpanded={false}
-        setIsExpanded={vi.fn()}
-        backlogHintIssueId={null}
-        setBacklogHintIssueId={vi.fn()}
-      />,
-    );
-
-    await user.type(screen.getByPlaceholderText("Issue title"), "Refactor auth");
-
-    await user.click(screen.getByRole("button", { name: /Switch to Agent/i }));
-
-    expect(onSwitchMode).toHaveBeenCalledTimes(1);
-    expect(onSwitchMode.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        prompt: "Refactor auth",
-        project_id: "proj-1",
-      }),
-    );
-  });
-
-  // Manual → agent must forward parent_issue_id when the modal was opened
-  // from "Add sub issue". Before this, the agent panel received no parent
-  // context and the new issue was filed as a standalone — silently dropping
-  // the sub-issue intent set by openCreateSubIssue. The parent_issue_identifier
-  // tags along so the agent panel can render a "Sub-issue of MUL-XX" chip
-  // without an extra round-trip.
+  // context and the new issue was filed as a standalone -silently dropping
   //
-  // The identifier fallback matters here: the mocked issueDetailOptions
-  // resolves to null (parent query not hydrated), so without the
-  // `data.parent_issue_identifier` fallback the agent chip would render as
-  // "Sub-issue of " with an empty tail. The UUID alone still wires the
-  // sub-issue relationship correctly, but the visible affordance breaks.
-  it("forwards parent_issue_id and falls back to seeded identifier when switching to agent mode", async () => {
-    const user = userEvent.setup();
-    const onSwitchMode = vi.fn();
 
-    renderModal(
-      <ManualCreatePanel
-        onClose={vi.fn()}
-        onSwitchMode={onSwitchMode}
-        data={{
-          parent_issue_id: "parent-uuid-1",
-          parent_issue_identifier: "MUL-2534",
-        }}
-        isExpanded={false}
-        setIsExpanded={vi.fn()}
-        backlogHintIssueId={null}
-        setBacklogHintIssueId={vi.fn()}
-      />,
-    );
-
-    await user.type(screen.getByPlaceholderText("Issue title"), "Refactor auth");
-    await user.click(screen.getByRole("button", { name: /Switch to Agent/i }));
-
-    expect(onSwitchMode).toHaveBeenCalledTimes(1);
-    expect(onSwitchMode.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        prompt: "Refactor auth",
-        parent_issue_id: "parent-uuid-1",
-        parent_issue_identifier: "MUL-2534",
-      }),
-    );
-  });
-
-  // Start date is a low-frequency field — by default it lives behind the
-  // ⋯ overflow menu and is not rendered inline. Clicking the overflow
+  // Start date is a low-frequency field -by default it lives behind the
+  // -overflow menu and is not rendered inline. Clicking the overflow
   // entry opens it (and mounts the inline pill so the popover has an
   // anchor); closing without picking returns it to the menu-only state.
   it("hides start date behind the overflow menu and reveals it on demand", async () => {
@@ -884,32 +789,6 @@ describe("CreateIssueModal", () => {
     expect(screen.queryByTestId("start-date-picker")).not.toBeInTheDocument();
   });
 
-  // Title + description are packed into the agent prompt on switch; if we
-  // leave them in the shared draft store, the next agent→manual switch
-  // surfaces the stale manual draft on top of the prompt-as-description,
-  // duplicating the user's text on every round-trip.
-  it("clears the manual draft when packing title and description into the agent prompt", async () => {
-    const user = userEvent.setup();
-
-    renderModal(
-      <ManualCreatePanel
-        onClose={vi.fn()}
-        onSwitchMode={vi.fn()}
-        isExpanded={false}
-        setIsExpanded={vi.fn()}
-        backlogHintIssueId={null}
-        setBacklogHintIssueId={vi.fn()}
-      />,
-    );
-
-    await user.type(screen.getByPlaceholderText("Issue title"), "Update");
-    await user.type(screen.getByPlaceholderText("Add description..."), "Some body");
-
-    mockSetDraft.mockClear();
-    await user.click(screen.getByRole("button", { name: /Switch to Agent/i }));
-
-    expect(mockSetDraft).toHaveBeenCalledWith({ title: "", description: "" });
-  });
 });
 
 

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -739,7 +738,7 @@ func TestClaudeExecuteSurfacesStderrWhenChildExitsEarly(t *testing.T) {
 	// failure mode that motivated PR #1674 — without sampling stderrBuf.Tail()
 	// after cmd.Wait() returns, Result.Error would be a useless
 	// "exit status 3".
-	fakePath := filepath.Join(t.TempDir(), "claude")
+	fakePath := testExecutablePath(t.TempDir(), "claude")
 	script := "#!/bin/sh\n" +
 		"IFS= read -r _\n" +
 		"echo \"FATAL ERROR: V8 abort: assertion failed\" >&2\n" +
@@ -791,7 +790,7 @@ func TestClaudeExecuteRecordsResultModelUsage(t *testing.T) {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
 
-	fakePath := filepath.Join(t.TempDir(), "claude")
+	fakePath := testExecutablePath(t.TempDir(), "claude")
 	script := "#!/bin/sh\n" +
 		"IFS= read -r _\n" +
 		"printf '%s\\n' '{\"type\":\"system\",\"session_id\":\"sess-result-usage\"}'\n" +

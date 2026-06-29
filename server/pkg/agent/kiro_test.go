@@ -117,7 +117,7 @@ done
 func TestKiroBackendSetModelFailureFailsTask(t *testing.T) {
 	t.Parallel()
 
-	fakePath := filepath.Join(t.TempDir(), "kiro-cli")
+	fakePath := testExecutablePath(t.TempDir(), "kiro-cli")
 	writeTestExecutable(t, fakePath, []byte(fakeKiroACPScript()))
 
 	backend, err := New("kiro", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -195,7 +195,7 @@ done
 func TestKiroBackendClearsSessionIDWhenSetModelSessionNotFound(t *testing.T) {
 	t.Parallel()
 
-	fakePath := filepath.Join(t.TempDir(), "kiro-cli")
+	fakePath := testExecutablePath(t.TempDir(), "kiro-cli")
 	writeTestExecutable(t, fakePath, []byte(fakeKiroACPStaleLoadSetModelScript()))
 
 	backend, err := New("kiro", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -243,7 +243,7 @@ func TestKiroBackendInvokesACPWithTrustAllTools(t *testing.T) {
 
 	tempDir := t.TempDir()
 	argsFile := filepath.Join(tempDir, "argv.txt")
-	fakePath := filepath.Join(tempDir, "kiro-cli")
+	fakePath := testExecutablePath(tempDir, "kiro-cli")
 	writeTestExecutable(t, fakePath, []byte(fakeKiroACPScript()))
 
 	backend, err := New("kiro", Config{
@@ -303,7 +303,7 @@ func TestKiroBackendUsesSessionLoadForResume(t *testing.T) {
 
 	tempDir := t.TempDir()
 	requestsFile := filepath.Join(tempDir, "requests.jsonl")
-	fakePath := filepath.Join(tempDir, "kiro-cli")
+	fakePath := testExecutablePath(tempDir, "kiro-cli")
 	writeTestExecutable(t, fakePath, []byte(fakeKiroACPScript()))
 
 	backend, err := New("kiro", Config{
@@ -401,7 +401,7 @@ func TestKiroLoadIncludesMcpServersFromConfig(t *testing.T) {
 	t.Parallel()
 
 	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
-	fakePath := filepath.Join(t.TempDir(), "kiro-cli")
+	fakePath := testExecutablePath(t.TempDir(), "kiro-cli")
 	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_load", `{}`)))
 
 	backend, err := New("kiro", Config{ExecutablePath: fakePath, Logger: slog.Default()})

@@ -48,12 +48,18 @@ export function ProjectPicker({
         )}
         <span className="truncate">{current ? current.title : t(($) => $.picker.no_project)}</span>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align={align} className="w-52">
+      <DropdownMenuContent align={align} className="w-80 max-w-[calc(100vw-2rem)]">
         {projects.map((p) => (
-          <DropdownMenuItem key={p.id} onClick={() => onUpdate({ project_id: p.id })}>
-            <ProjectIcon project={p} size="md" className="mr-1" />
-            <span className="truncate">{p.title}</span>
-            {p.id === projectId && <Check className="ml-auto h-3.5 w-3.5 shrink-0" />}
+          <DropdownMenuItem
+            key={p.id}
+            className="items-start"
+            onClick={() => onUpdate({ project_id: p.id })}
+          >
+            <ProjectIcon project={p} size="md" className="mr-1 mt-0.5" />
+            <span className="min-w-0 flex-1 whitespace-normal break-words leading-snug">
+              {p.title}
+            </span>
+            {p.id === projectId && <Check className="ml-auto mt-0.5 h-3.5 w-3.5 shrink-0" />}
           </DropdownMenuItem>
         ))}
         {projects.length > 0 && projectId && <DropdownMenuSeparator />}

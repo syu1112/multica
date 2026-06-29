@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -979,6 +980,9 @@ func TestCleanupSidecarsSwallowsMissingAndNonEmptyDirs(t *testing.T) {
 // is unprivileged, so the branch is exercised in CI.
 func TestCleanupSidecarsSurfacesEACCESOnEmptyRecordedDir(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod does not synthesize POSIX EACCES on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("chmod is bypassed for uid 0; cannot synthesize EACCES on rmdir")
 	}
@@ -1030,6 +1034,9 @@ func TestCleanupSidecarsSurfacesEACCESOnEmptyRecordedDir(t *testing.T) {
 // Skipped when running as root for the same reason as above.
 func TestCleanupSidecarsSurfacesEACCESWhenReadDirFailsToo(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod does not synthesize POSIX EACCES on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("chmod is bypassed for uid 0; cannot synthesize EACCES on rmdir + readdir")
 	}

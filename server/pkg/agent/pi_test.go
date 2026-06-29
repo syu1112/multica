@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -76,7 +75,7 @@ func TestPiExecuteAttachesStdinPipe(t *testing.T) {
 		t.Skip("stdin fd inspection relies on /proc/self/fd/0")
 	}
 
-	fakePath := filepath.Join(t.TempDir(), "pi")
+	fakePath := testExecutablePath(t.TempDir(), "pi")
 	script := "#!/bin/sh\n" +
 		"kind=$(stat -c '%F' -L /proc/self/fd/0 2>/dev/null || echo unknown)\n" +
 		"case \"$kind\" in\n" +

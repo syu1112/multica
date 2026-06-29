@@ -66,7 +66,7 @@ func fakeKimiACPScript() string {
 #
 # Writes the full argv (one arg per line) to $KIMI_ARGS_FILE if that env
 # var is set, so tests can assert that the daemon invokes us with the
-# right flags (`+"`--yolo acp`"+`, not bare `+"`acp`"+`).
+# right flags (` + "`--yolo acp`" + `, not bare ` + "`acp`" + `).
 #
 # Then reads one JSON-RPC request per line from stdin, matches on the
 # method name, and writes back a canned response. Exits after set_model
@@ -103,7 +103,7 @@ done
 func TestKimiBackendSetModelFailureFailsTask(t *testing.T) {
 	t.Parallel()
 
-	fakePath := filepath.Join(t.TempDir(), "kimi")
+	fakePath := testExecutablePath(t.TempDir(), "kimi")
 	writeTestExecutable(t, fakePath, []byte(fakeKimiACPScript()))
 
 	backend, err := New("kimi", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -185,7 +185,7 @@ done
 func TestKimiBackendClearsSessionIDWhenSetModelSessionNotFound(t *testing.T) {
 	t.Parallel()
 
-	fakePath := filepath.Join(t.TempDir(), "kimi")
+	fakePath := testExecutablePath(t.TempDir(), "kimi")
 	writeTestExecutable(t, fakePath, []byte(fakeKimiACPStaleResumeSetModelScript()))
 
 	backend, err := New("kimi", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -241,7 +241,7 @@ func TestKimiBackendInvokesACPSubcommand(t *testing.T) {
 
 	tempDir := t.TempDir()
 	argsFile := filepath.Join(tempDir, "argv.txt")
-	fakePath := filepath.Join(tempDir, "kimi")
+	fakePath := testExecutablePath(tempDir, "kimi")
 	writeTestExecutable(t, fakePath, []byte(fakeKimiACPScript()))
 
 	backend, err := New("kimi", Config{
@@ -297,7 +297,7 @@ func TestKimiResumeIncludesMcpServers(t *testing.T) {
 	t.Parallel()
 
 	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
-	fakePath := filepath.Join(t.TempDir(), "kimi")
+	fakePath := testExecutablePath(t.TempDir(), "kimi")
 	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_resume", `{}`)))
 
 	backend, err := New("kimi", Config{ExecutablePath: fakePath, Logger: slog.Default()})

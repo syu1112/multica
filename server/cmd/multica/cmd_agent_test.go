@@ -42,7 +42,7 @@ func freshAgentEnvSetCmd() *cobra.Command {
 // Outside agent context, the three-level fallback (flag → env → config) is
 // unchanged.
 func TestResolveWorkspaceID_AgentContextSkipsConfig(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 
 	// Seed the global CLI config with a workspace_id that must NOT be
 	// picked up while running inside an agent task.
@@ -109,7 +109,7 @@ func TestResolveWorkspaceID_AgentContextSkipsConfig(t *testing.T) {
 }
 
 func TestResolveToken_AgentContextSkipsConfig(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 
 	if err := cli.SaveCLIConfig(cli.CLIConfig{Token: "mul_profile_token"}); err != nil {
 		t.Fatalf("seed config: %v", err)
@@ -276,7 +276,7 @@ func TestParseCustomEnv(t *testing.T) {
 // --custom-env* flags are gone from `agent update`; the hint must
 // surface their replacement so users discover the new audited path.
 func TestAgentUpdateNoFieldsErrorPointsAtEnvCommand(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("MULTICA_SERVER_URL", "http://127.0.0.1:0")
 	t.Setenv("MULTICA_WORKSPACE_ID", "test-ws")
 	t.Setenv("MULTICA_TOKEN", "test-token")

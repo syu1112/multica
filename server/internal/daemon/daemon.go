@@ -155,8 +155,8 @@ type Daemon struct {
 	// command resolves; read by runTask via customCommandPathForRuntime to
 	// launch the custom command for a claimed task. Guarded by mu.
 	profileCommandPaths map[string]string
-	reloading    sync.Mutex         // prevents concurrent workspace syncs
-	runtimeSet   *runtimeSetWatcher // multi-subscriber pub/sub for runtime-set changes
+	reloading           sync.Mutex         // prevents concurrent workspace syncs
+	runtimeSet          *runtimeSetWatcher // multi-subscriber pub/sub for runtime-set changes
 
 	versionsMu    sync.RWMutex      // guards agentVersions
 	agentVersions map[string]string // provider -> detected CLI version (set during registration)
@@ -374,7 +374,7 @@ func (d *Daemon) handleRuntimeGone(runtimeID string) {
 //
 //  1. reregisterNextAttempt: a future timestamp means a peer holds the slot or
 //     a previous attempt failed and we are inside the failure backoff window.
-//  2. reregisterLastCompletedAt: a timestamp at or after our entryAt means a
+//  2. reregisterLastCompletedAt: a timestamp after our entryAt means a
 //     peer's register SUCCEEDED after we entered handleRuntimeGone, so the
 //     workspace state is already covered for our wave and we can bail.
 //     Failures intentionally don't stamp this field (see
@@ -391,7 +391,7 @@ func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryAt, now time.Time
 	if next, ok := d.reregisterNextAttempt[workspaceID]; ok && now.Before(next) {
 		return false
 	}
-	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && !last.Before(entryAt) {
+	if last, ok := d.reregisterLastCompletedAt[workspaceID]; ok && last.After(entryAt) {
 		return false
 	}
 	d.reregisterNextAttempt[workspaceID] = now.Add(reregisterCoalesceWindow)
@@ -2713,8 +2713,8 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		"reuse_workdir", task.PriorWorkDir != "",
 	)
 
-	// If the task targets a project_resource of type local_directory that
-	// is pinned to this daemon, acquire the path mutex before runner.run
+	// If the task targets a project_resource of type local_directory, acquire
+	// the path mutex before runner.run
 	// so the server-side state machine is dispatched →
 	// waiting_local_directory → running rather than backwards-transitioning
 	// from running into the wait state. The release is deferred so a panic
@@ -2831,13 +2831,12 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// crash leaves the directory as an orphan (cleaned up by GCOrphanTTL).
 	if result.EnvRoot != "" {
 		if meta, ok := gcMetaForTask(task); ok {
-			// A local_directory project_resource matched this daemon
-			// means the agent ran in the user's own tree. Stamp the
-			// meta so the GC loop never tries to RemoveAll envRoot's
-			// sibling workdir (which is the user's path) or the envRoot
-			// itself (we want output/ and logs/ to linger for forensic
-			// access).
-			if assignment, _ := findLocalDirectoryAssignment(task.ProjectResources, d.cfg.DaemonID); assignment != nil {
+			// A local_directory project_resource means the agent ran in the
+			// user's own tree. Stamp the meta so the GC loop never tries to
+			// RemoveAll envRoot's sibling workdir (which is the user's path) or
+			// the envRoot itself (we want output/ and logs/ to linger for
+			// forensic access).
+			if assignment, _ := findLocalDirectoryAssignment(task.ProjectResources); assignment != nil {
 				meta.LocalDirectory = true
 			}
 			if err := execenv.WriteGCMeta(result.EnvRoot, meta, taskLog); err != nil {
@@ -2848,11 +2847,10 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 }
 
 // acquireLocalDirectoryLockIfNeeded inspects the task's project resources for
-// a local_directory pinned to this daemon, validates the path, and takes the
-// path mutex. Returns a release callback (nil when no local_directory
-// resource applies) and abort=true when the caller must bail without
-// starting the task (the helper has already reported the failure to the
-// server).
+// a local_directory, validates the path, and takes the path mutex. Returns a
+// release callback (nil when no local_directory resource applies) and
+// abort=true when the caller must bail without starting the task (the helper
+// has already reported the failure to the server).
 //
 // The helper covers four distinct failure modes:
 //
@@ -2865,10 +2863,10 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 //  4. The blocking wait is cancelled (daemon shutdown, server-side cancel)
 //     — fail the task with the ctx error.
 func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Task, taskLog *slog.Logger) (release func(), abort bool) {
-	if len(task.ProjectResources) == 0 || d.cfg.DaemonID == "" {
+	if len(task.ProjectResources) == 0 {
 		return nil, false
 	}
-	assignment, err := findLocalDirectoryAssignment(task.ProjectResources, d.cfg.DaemonID)
+	assignment, err := findLocalDirectoryAssignment(task.ProjectResources)
 	if err != nil {
 		taskLog.Error("local_directory: resolve resource failed", "error", err)
 		if failErr := d.client.FailTask(ctx, task.ID, err.Error(), "", "", "local_directory_error"); failErr != nil {
@@ -3210,7 +3208,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Resolve any local_directory assignment again here so runTask can plumb
 	// LocalWorkDir into execenv. handleTask already validated + locked the
 	// path; this call is a pure JSON parse over the same task payload.
-	localAssignment, _ := findLocalDirectoryAssignment(task.ProjectResources, d.cfg.DaemonID)
+	localAssignment, _ := findLocalDirectoryAssignment(task.ProjectResources)
 	// Reuse intentionally skipped for local_directory tasks: the prior
 	// WorkDir is the user's own path (always present) but the reuse path
 	// loses the envRoot association the GC loop needs, and re-running

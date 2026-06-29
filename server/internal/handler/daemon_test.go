@@ -2581,6 +2581,131 @@ func TestClaimTask_AutopilotRunOnly_PopulatesWorkspaceID(t *testing.T) {
 	}
 }
 
+func TestClaimTask_AutopilotRunOnly_LoadsIssueProjectResources(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	setHandlerTestWorkspaceRepos(t, []map[string]string{
+		{"url": "https://github.com/example/workspace-fallback", "description": "ws"},
+	})
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+	`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatalf("setup: get agent: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET daemon_id = 'test-autopilot-project-resources' WHERE id = $1`, runtimeID); err != nil {
+		t.Fatalf("set runtime daemon id: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = NULL WHERE id = $1`, runtimeID)
+	})
+
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id
+	`, testWorkspaceID, "Autopilot project resources").Scan(&projectID); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+
+	const localPath = "/Users/foo/autopilot-project"
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO project_resource (
+			project_id, workspace_id, resource_type, resource_ref, position
+		) VALUES ($1, $2, 'local_directory', $3::jsonb, 0)
+	`, projectID, testWorkspaceID, `{"local_path":"`+localPath+`","daemon_id":"creator-daemon","label":"autopilot-local"}`); err != nil {
+		t.Fatalf("create local_directory project_resource: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, project_id, title, status, priority, creator_id, creator_type, number, position
+		) VALUES ($1, $2, 'autopilot project resource issue', 'todo', 'medium', $3, 'member', 88011, 0)
+		RETURNING id
+	`, testWorkspaceID, projectID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	var autopilotID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO autopilot (
+			workspace_id, title, assignee_id, execution_mode,
+			created_by_type, created_by_id
+		)
+		VALUES ($1, 'claim autopilot project resources', $2, 'run_only', 'member', $3)
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID).Scan(&autopilotID); err != nil {
+		t.Fatalf("create autopilot: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM autopilot WHERE id = $1`, autopilotID) })
+
+	var runID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO autopilot_run (autopilot_id, source, status, issue_id)
+		VALUES ($1, 'manual', 'running', $2)
+		RETURNING id
+	`, autopilotID, issueID).Scan(&runID); err != nil {
+		t.Fatalf("create autopilot_run: %v", err)
+	}
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, issue_id, status, priority, autopilot_run_id
+		)
+		VALUES ($1, $2, NULL, 'queued', 0, $3)
+		RETURNING id
+	`, agentID, runtimeID, runID).Scan(&taskID); err != nil {
+		t.Fatalf("create autopilot task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil,
+		testWorkspaceID, "test-autopilot-project-resources")
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Task *struct {
+			ProjectID        string                `json:"project_id"`
+			ProjectResources []ProjectResourceData `json:"project_resources"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Task == nil {
+		t.Fatal("expected task in response")
+	}
+	if resp.Task.ProjectID != projectID {
+		t.Fatalf("project_id = %q, want %q", resp.Task.ProjectID, projectID)
+	}
+	if len(resp.Task.ProjectResources) != 1 {
+		t.Fatalf("project_resources count = %d, want 1", len(resp.Task.ProjectResources))
+	}
+	resource := resp.Task.ProjectResources[0]
+	if resource.ResourceType != "local_directory" {
+		t.Fatalf("project resource type = %q, want local_directory", resource.ResourceType)
+	}
+	var ref localDirectoryRef
+	if err := json.Unmarshal(resource.ResourceRef, &ref); err != nil {
+		t.Fatalf("decode local_directory ref: %v", err)
+	}
+	if ref.LocalPath != localPath {
+		t.Fatalf("local_path = %q, want %q", ref.LocalPath, localPath)
+	}
+}
+
 // TestClaimTaskByRuntime_TaskWorkspaceMismatch_CancelsAndRejects verifies
 // the defense-in-depth check in ClaimTaskByRuntime: if a task is somehow
 // dispatched to a runtime whose workspace doesn't match the task's
@@ -3499,6 +3624,106 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	}
 	if task.PriorWorkDir != "/tmp/same-chat-workdir" {
 		t.Fatalf("chat runtime match: expected PriorWorkDir='/tmp/same-chat-workdir', got %q", task.PriorWorkDir)
+	}
+}
+
+func TestClaimTask_ChatLoadsIssueProjectResources(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
+
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id
+	`, testWorkspaceID, "Chat project resources").Scan(&projectID); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectID) })
+
+	const localPath = "/Users/foo/chat-project"
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO project_resource (
+			project_id, workspace_id, resource_type, resource_ref, position
+		) VALUES ($1, $2, 'local_directory', $3::jsonb, 0)
+	`, projectID, testWorkspaceID, `{"local_path":"`+localPath+`","daemon_id":"creator-daemon","label":"chat-local"}`); err != nil {
+		t.Fatalf("create local_directory project_resource: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, project_id, title, status, priority, creator_id, creator_type, number, position
+		) VALUES ($1, $2, 'chat project resource issue', 'todo', 'medium', $3, 'member', 88111, 0)
+		RETURNING id
+	`, testWorkspaceID, projectID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	var sessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, issue_id)
+		VALUES ($1, $2, $3, 'chat project resources', $4)
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID, issueID).Scan(&sessionID); err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, sessionID) })
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content)
+		VALUES ($1, 'user', 'please edit code in the project')
+	`, sessionID); err != nil {
+		t.Fatalf("create chat message: %v", err)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, issue_id, status, priority)
+		VALUES ($1, $2, $3, $4, 'queued', 2)
+	`, agentID, runtimeID, sessionID, issueID); err != nil {
+		t.Fatalf("create chat task: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil,
+		testWorkspaceID, daemonID)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Task *struct {
+			ProjectID        string                `json:"project_id"`
+			ProjectResources []ProjectResourceData `json:"project_resources"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Task == nil {
+		t.Fatal("expected task in response")
+	}
+	if resp.Task.ProjectID != projectID {
+		t.Fatalf("project_id = %q, want %q", resp.Task.ProjectID, projectID)
+	}
+	if len(resp.Task.ProjectResources) != 1 {
+		t.Fatalf("project_resources count = %d, want 1", len(resp.Task.ProjectResources))
+	}
+	resource := resp.Task.ProjectResources[0]
+	if resource.ResourceType != "local_directory" {
+		t.Fatalf("project resource type = %q, want local_directory", resource.ResourceType)
+	}
+	var ref localDirectoryRef
+	if err := json.Unmarshal(resource.ResourceRef, &ref); err != nil {
+		t.Fatalf("decode local_directory ref: %v", err)
+	}
+	if ref.LocalPath != localPath {
+		t.Fatalf("local_path = %q, want %q", ref.LocalPath, localPath)
 	}
 }
 

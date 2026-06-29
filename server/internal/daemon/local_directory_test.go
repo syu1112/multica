@@ -17,6 +17,25 @@ import (
 	"time"
 )
 
+func newLocalDirectoryTestDir(t *testing.T) string {
+	t.Helper()
+
+	root := os.Getenv("MULTICA_TEST_LOCAL_DIR_ROOT")
+	if root == "" {
+		root = "."
+	}
+	dir, err := os.MkdirTemp(root, "local-directory-test-*")
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("abs temp dir: %v", err)
+	}
+	return abs
+}
+
 func TestFindLocalDirectoryAssignment(t *testing.T) {
 	const thisDaemon = "d-mine"
 	otherDaemon := "d-other"
@@ -30,37 +49,40 @@ func TestFindLocalDirectoryAssignment(t *testing.T) {
 		return raw
 	}
 
-	tmp := t.TempDir()
+	tmp := newLocalDirectoryTestDir(t)
 
 	t.Run("no resources returns nil", func(t *testing.T) {
-		got, err := findLocalDirectoryAssignment(nil, thisDaemon)
+		got, err := findLocalDirectoryAssignment(nil)
 		if err != nil || got != nil {
 			t.Fatalf("expected (nil, nil), got (%+v, %v)", got, err)
 		}
 	})
 
-	t.Run("other daemon is skipped", func(t *testing.T) {
+	t.Run("daemon_id mismatch is ignored", func(t *testing.T) {
 		got, err := findLocalDirectoryAssignment([]ProjectResourceData{
 			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp, DaemonID: otherDaemon})},
-		}, thisDaemon)
-		if err != nil || got != nil {
-			t.Fatalf("expected (nil, nil), got (%+v, %v)", got, err)
+		})
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if got == nil {
+			t.Fatalf("expected assignment, got nil")
 		}
 	})
 
 	t.Run("non-matching type is skipped", func(t *testing.T) {
 		got, err := findLocalDirectoryAssignment([]ProjectResourceData{
 			{ID: "r1", ResourceType: "github_repo", ResourceRef: json.RawMessage(`{"url":"https://x"}`)},
-		}, thisDaemon)
+		})
 		if err != nil || got != nil {
 			t.Fatalf("expected (nil, nil), got (%+v, %v)", got, err)
 		}
 	})
 
-	t.Run("matching daemon returns assignment", func(t *testing.T) {
+	t.Run("local_directory returns assignment", func(t *testing.T) {
 		got, err := findLocalDirectoryAssignment([]ProjectResourceData{
 			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp, DaemonID: thisDaemon})},
-		}, thisDaemon)
+		})
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -78,7 +100,7 @@ func TestFindLocalDirectoryAssignment(t *testing.T) {
 	t.Run("missing daemon_id is rejected", func(t *testing.T) {
 		_, err := findLocalDirectoryAssignment([]ProjectResourceData{
 			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp})},
-		}, thisDaemon)
+		})
 		if err == nil {
 			t.Fatalf("expected error for missing daemon_id")
 		}
@@ -87,7 +109,7 @@ func TestFindLocalDirectoryAssignment(t *testing.T) {
 	t.Run("relative path is rejected", func(t *testing.T) {
 		_, err := findLocalDirectoryAssignment([]ProjectResourceData{
 			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: "relative/path", DaemonID: thisDaemon})},
-		}, thisDaemon)
+		})
 		if err == nil {
 			t.Fatalf("expected error for relative path")
 		}
@@ -96,44 +118,40 @@ func TestFindLocalDirectoryAssignment(t *testing.T) {
 	t.Run("malformed ref json fails", func(t *testing.T) {
 		_, err := findLocalDirectoryAssignment([]ProjectResourceData{
 			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: json.RawMessage(`{not json`)},
-		}, thisDaemon)
+		})
 		if err == nil {
 			t.Fatalf("expected error for malformed json")
 		}
 	})
 
-	t.Run("two local_directory rows on this daemon fail fast", func(t *testing.T) {
+	t.Run("two local_directory rows fail fast", func(t *testing.T) {
 		// Server-side findLocalDirectoryConflict enforces one
-		// local_directory per (project, daemon). If two rows are
-		// somehow present (older API client, direct DB writes), the
-		// daemon must refuse to guess which directory to execute in.
-		tmp2 := t.TempDir()
+		// local_directory per project. If two rows are somehow present
+		// (older API client, direct DB writes), the daemon must refuse
+		// to guess which directory to execute in.
+		tmp2 := newLocalDirectoryTestDir(t)
 		_, err := findLocalDirectoryAssignment([]ProjectResourceData{
 			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp, DaemonID: thisDaemon})},
 			{ID: "r2", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp2, DaemonID: thisDaemon})},
-		}, thisDaemon)
+		})
 		if err == nil {
-			t.Fatalf("expected error for two local_directory rows pinned to this daemon")
+			t.Fatalf("expected error for two local_directory rows")
 		}
 		if !strings.Contains(err.Error(), "multiple local_directory") {
 			t.Errorf("error %q did not mention multiple local_directory", err)
 		}
 	})
 
-	t.Run("local_directory rows on different daemons coexist", func(t *testing.T) {
-		// Different daemons MAY each carry one row — same path on
-		// different machines is allowed; this daemon only resolves
-		// its own row regardless of how many other-daemon rows are
-		// in the list.
-		got, err := findLocalDirectoryAssignment([]ProjectResourceData{
+	t.Run("local_directory rows on different daemons fail fast", func(t *testing.T) {
+		_, err := findLocalDirectoryAssignment([]ProjectResourceData{
 			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp, DaemonID: thisDaemon})},
 			{ID: "r2", ResourceType: localDirectoryResourceType, ResourceRef: mkRef(t, localDirectoryRef{LocalPath: tmp, DaemonID: otherDaemon})},
-		}, thisDaemon)
-		if err != nil {
-			t.Fatalf("err: %v", err)
+		})
+		if err == nil {
+			t.Fatalf("expected error for multiple local_directory rows")
 		}
-		if got == nil {
-			t.Fatalf("expected assignment, got nil")
+		if !strings.Contains(err.Error(), "multiple local_directory") {
+			t.Errorf("error %q did not mention multiple local_directory", err)
 		}
 	})
 }
@@ -143,7 +161,7 @@ func TestValidateLocalPath(t *testing.T) {
 		t.Skip("blacklist constants are POSIX-only in this test")
 	}
 
-	dir := t.TempDir()
+	dir := newLocalDirectoryTestDir(t)
 
 	t.Run("accepts a writable directory", func(t *testing.T) {
 		if err := validateLocalPath(dir); err != nil {
@@ -456,14 +474,14 @@ func (e *waiterError) Error() string { return e.msg }
 func TestAcquireLocalDirectoryLock_CancelDuringWait(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir() // valid, writable, non-blacklisted
+	dir := newLocalDirectoryTestDir(t) // valid, writable, non-blacklisted
 	// Pre-claim must use the same key the production path computes, which
 	// is the symlink-resolved realpath. On macOS, /tmp/... resolves to
 	// /private/tmp/..., so a literal preclaim with `dir` would miss the
 	// production key and the new acquire would win on the fast path.
-	realDir, err := filepath.EvalSymlinks(dir)
+	realDir, err := resolveRealPath(dir)
 	if err != nil {
-		t.Fatalf("evalsymlinks: %v", err)
+		t.Fatalf("resolve real path: %v", err)
 	}
 
 	// Server-side state for the fake. Mark the task cancelled only after
@@ -553,4 +571,39 @@ func TestAcquireLocalDirectoryLock_CancelDuringWait(t *testing.T) {
 	if got := waitCall.Load(); got != 1 {
 		t.Errorf("wait-local-directory calls = %d, want 1", got)
 	}
+}
+
+func TestAcquireLocalDirectoryLock_DaemonIDEmptyStillUsesProjectLocalDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := newLocalDirectoryTestDir(t)
+	ref, err := json.Marshal(localDirectoryRef{LocalPath: dir, DaemonID: "resource-daemon"})
+	if err != nil {
+		t.Fatalf("marshal ref: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client:         NewClient(srv.URL),
+		logger:         slog.Default(),
+		localPathLocks: NewLocalPathLocker(),
+	}
+
+	release, abort := d.acquireLocalDirectoryLockIfNeeded(context.Background(), Task{
+		ID: "task-local-directory",
+		ProjectResources: []ProjectResourceData{
+			{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: ref},
+		},
+	}, slog.Default())
+	if abort {
+		t.Fatal("expected local_directory lock acquisition to continue, got abort=true")
+	}
+	if release == nil {
+		t.Fatal("expected local_directory lock release callback, got nil")
+	}
+	release()
 }

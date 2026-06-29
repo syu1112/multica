@@ -409,7 +409,10 @@ func (h *Handler) DeleteSquad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := requestUserID(r)
-	userUUID, _ := parseUUIDOrBadRequest(w, userID, "user_id")
+	userUUID, ok := parseUUIDOrBadRequest(w, userID, "user_id")
+	if !ok {
+		return
+	}
 
 	if _, err := h.Queries.ArchiveSquad(r.Context(), db.ArchiveSquadParams{
 		ID:         squad.ID,
@@ -1031,8 +1034,8 @@ type RuntimeBriefResponse struct {
 	Name string `json:"name"`
 }
 
-// ListSquadLeaderCompatibleRuntimes returns local runtimes owned by the squad
-// leader's owner that are compatible with the leader agent's capability
+// ListSquadLeaderCompatibleRuntimes returns local runtimes owned by the current
+// request user that are compatible with the leader agent's capability
 // requirements (runtime provider / profile).
 func (h *Handler) ListSquadLeaderCompatibleRuntimes(w http.ResponseWriter, r *http.Request) {
 	squad, _, ok := h.loadSquadInWorkspace(w, r)
@@ -1049,9 +1052,23 @@ func (h *Handler) ListSquadLeaderCompatibleRuntimes(w http.ResponseWriter, r *ht
 		return
 	}
 
-	runtimes, err := h.Queries.ListAgentRuntimesByOwner(r.Context(), db.ListAgentRuntimesByOwnerParams{
+	// If leader agent has no capability requirements, no runtimes can be compatible.
+	if leader.RuntimeProvider == "" && !leader.RuntimeProfileID.Valid {
+		writeJSON(w, http.StatusOK, []RuntimeBriefResponse{})
+		return
+	}
+
+	userID := requestUserID(r)
+	userUUID, ok := parseUUIDOrBadRequest(w, userID, "user_id")
+	if !ok {
+		return
+	}
+
+	runtimes, err := h.Queries.ListUserCompatibleRuntimes(r.Context(), db.ListUserCompatibleRuntimesParams{
 		WorkspaceID: squad.WorkspaceID,
-		OwnerID:     leader.OwnerID,
+		OwnerID:     userUUID,
+		ProfileID:   leader.RuntimeProfileID,
+		Provider:    leader.RuntimeProvider,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list runtimes")
@@ -1060,30 +1077,6 @@ func (h *Handler) ListSquadLeaderCompatibleRuntimes(w http.ResponseWriter, r *ht
 
 	result := make([]RuntimeBriefResponse, 0, len(runtimes))
 	for _, rt := range runtimes {
-		if rt.RuntimeMode != "local" || rt.Status != "online" {
-			continue
-		}
-
-		// Compatibility: mirror runtimeMatchesAgentCapability from frontend.
-		if leader.RuntimeProfileID.Valid {
-			// Agent uses a custom runtime profile – runtime must match exactly.
-			if !rt.ProfileID.Valid || rt.ProfileID != leader.RuntimeProfileID {
-				continue
-			}
-		} else {
-			// Agent uses a built-in provider – runtime must match provider
-			// and must not have a custom profile.
-			if leader.RuntimeProvider == "" {
-				continue
-			}
-			if rt.ProfileID.Valid {
-				continue
-			}
-			if rt.Provider != leader.RuntimeProvider {
-				continue
-			}
-		}
-
 		result = append(result, RuntimeBriefResponse{
 			ID:   uuidToString(rt.ID),
 			Name: rt.Name,

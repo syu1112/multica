@@ -1,20 +1,28 @@
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithI18n } from "../test/i18n";
+import type { AgentRuntime } from "@multica/core/types";
 
 const longRepoUrl =
   "https://github.com/multica-ai/a-very-long-repository-name-that-needs-a-tooltip";
 const apiRepoUrl = "https://github.com/multica-ai/api";
 const webRepoUrl = "https://github.com/multica-ai/web";
+const mockCreateProjectMutateAsync = vi.fn();
+let mockRuntimes: AgentRuntime[] = [];
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({ data: [] }),
+  useQuery: (options: { queryKey?: readonly unknown[] }) => {
+    if (options.queryKey?.[0] === "runtimes") {
+      return { data: mockRuntimes };
+    }
+    return { data: [] };
+  },
 }));
 
 vi.mock("@multica/core/projects/mutations", () => ({
-  useCreateProject: () => ({ mutateAsync: vi.fn() }),
+  useCreateProject: () => ({ mutateAsync: mockCreateProjectMutateAsync }),
 }));
 
 vi.mock("@multica/core/projects", () => ({
@@ -55,6 +63,10 @@ vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: () => ({ queryKey: ["agents"], queryFn: vi.fn() }),
 }));
 
+vi.mock("@multica/core/runtimes/queries", () => ({
+  runtimeListOptions: () => ({ queryKey: ["runtimes"], queryFn: vi.fn() }),
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: vi.fn() }),
 }));
@@ -64,8 +76,11 @@ vi.mock("../navigation", () => ({
 }));
 
 vi.mock("../editor", () => {
-  const ContentEditor = React.forwardRef<HTMLTextAreaElement, { placeholder?: string }>(
-    ({ placeholder }, ref) => <textarea ref={ref} placeholder={placeholder} />,
+  const ContentEditor = React.forwardRef<{ getMarkdown: () => string }, { placeholder?: string }>(
+    ({ placeholder }, ref) => {
+      React.useImperativeHandle(ref, () => ({ getMarkdown: () => "" }));
+      return <textarea placeholder={placeholder} />;
+    },
   );
   ContentEditor.displayName = "ContentEditor";
 
@@ -162,7 +177,35 @@ vi.mock("sonner", () => ({
 
 import { CreateProjectModal } from "./create-project";
 
+function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
+  return {
+    id: "runtime-1",
+    workspace_id: "workspace-1",
+    daemon_id: "daemon-a",
+    name: "ThinkPad",
+    runtime_mode: "local",
+    provider: "codex",
+    launch_header: "codex",
+    status: "online",
+    device_info: "",
+    metadata: {},
+    owner_id: "user-1",
+    visibility: "private",
+    profile_id: null,
+    last_seen_at: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
 describe("CreateProjectModal", () => {
+  beforeEach(() => {
+    mockCreateProjectMutateAsync.mockReset();
+    mockCreateProjectMutateAsync.mockResolvedValue({ id: "project-1" });
+    mockRuntimes = [];
+  });
+
   it("exposes full repository URLs in the repository picker", () => {
     render(<CreateProjectModal onClose={vi.fn()} />);
 
@@ -193,5 +236,36 @@ describe("CreateProjectModal", () => {
     await user.type(repoSearchInput, "no-match");
 
     expect(screen.getByText("No repositories match your search.")).toBeInTheDocument();
+  });
+
+  it("creates a local_directory resource from a manually entered workdir on web", async () => {
+    const user = userEvent.setup();
+    mockRuntimes = [makeRuntime()];
+
+    renderWithI18n(<CreateProjectModal onClose={vi.fn()} />);
+
+    await user.type(screen.getByPlaceholderText("Project title"), "Local workdir project");
+    await user.click(screen.getByRole("button", { name: "Local directory" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Local directory path" }),
+      "C:\\Users\\imshe\\multica_workspaces\\abc\\workdir",
+    );
+    await user.click(screen.getByRole("button", { name: "Create Project" }));
+
+    expect(mockCreateProjectMutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Local workdir project",
+        resources: [
+          {
+            resource_type: "local_directory",
+            resource_ref: {
+              local_path: "C:\\Users\\imshe\\multica_workspaces\\abc\\workdir",
+              daemon_id: "daemon-a",
+              label: "workdir",
+            },
+          },
+        ],
+      }),
+    );
   });
 });

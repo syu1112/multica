@@ -4,9 +4,14 @@ package agent
 
 import (
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 )
+
+func testExecutablePath(dir, name string) string {
+	return filepath.Join(dir, name)
+}
 
 // writeTestExecutable writes content to path with exec perms while holding
 // syscall.ForkLock.RLock, so no concurrent t.Parallel() sibling can fork

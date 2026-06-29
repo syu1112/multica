@@ -148,7 +148,6 @@ func (s *TaskService) resolveRuntimeForTask(ctx context.Context, workspaceID pgt
 		WorkspaceID:         workspaceID,
 		Agent:               resolvedAgent,
 		RequesterUserID:     requesterID,
-		AgentOwnerID:        agent.OwnerID,
 		ExplicitRuntimeID:   selectedRuntimeID,
 		AllowExplicitChoice: selectedRuntimeID.Valid,
 	})

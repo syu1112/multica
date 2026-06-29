@@ -123,7 +123,7 @@ func TestRunCodexDebugModels_ArgvSeenByBinary(t *testing.T) {
 
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
-	fake := filepath.Join(dir, "codex")
+	fake := testExecutablePath(dir, "codex")
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$@\" > '" + argvFile + "'\n" +
 		"echo '{\"models\":[]}'\n"
@@ -391,7 +391,7 @@ func TestValidateThinkingLevel_OpenCodeEmptyModelUsesAdvertisedVariants(t *testi
 	}()
 
 	dir := t.TempDir()
-	fake := filepath.Join(dir, "opencode")
+	fake := testExecutablePath(dir, "opencode")
 	script := `#!/bin/sh
 if [ "$1" = "models" ]; then
   cat <<'EOF'
@@ -435,7 +435,7 @@ echo "opencode 9.9.9"
 func writeFakeClaudeHelpBinary(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "claude")
+	path := testExecutablePath(dir, "claude")
 	script := "#!/bin/sh\n" +
 		"cat <<'EOF'\n" +
 		"Usage: claude [options]\n" +

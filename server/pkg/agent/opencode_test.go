@@ -885,7 +885,7 @@ func TestOpencodeBackendAnchorsDirAndPWD(t *testing.T) {
 	tempDir := t.TempDir()
 	argsFile := filepath.Join(tempDir, "argv.txt")
 	pwdFile := filepath.Join(tempDir, "pwd.txt")
-	fakePath := filepath.Join(tempDir, "opencode")
+	fakePath := testExecutablePath(tempDir, "opencode")
 	writeTestExecutable(t, fakePath, []byte(fakeOpencodeScript()))
 
 	workDir := t.TempDir()
@@ -959,7 +959,7 @@ func TestOpencodeBackendInjectsThinkingVariant(t *testing.T) {
 
 	tempDir := t.TempDir()
 	argsFile := filepath.Join(tempDir, "argv.txt")
-	fakePath := filepath.Join(tempDir, "opencode")
+	fakePath := testExecutablePath(tempDir, "opencode")
 	writeTestExecutable(t, fakePath, []byte(fakeOpencodeScript()))
 
 	backend, err := New("opencode", Config{
@@ -1027,7 +1027,7 @@ func TestOpencodeBackendDoesNotUsePermissionEnvOverride(t *testing.T) {
 
 	tempDir := t.TempDir()
 	permissionFile := filepath.Join(tempDir, "permission.json")
-	fakePath := filepath.Join(tempDir, "opencode")
+	fakePath := testExecutablePath(tempDir, "opencode")
 	writeTestExecutable(t, fakePath, []byte(fakeOpencodeScript()))
 
 	backend, err := New("opencode", Config{
@@ -1070,7 +1070,7 @@ func TestOpencodeBackendQuestionDenySurvivesUserConfig(t *testing.T) {
 
 	tempDir := t.TempDir()
 	argsFile := filepath.Join(tempDir, "argv.txt")
-	fakePath := filepath.Join(tempDir, "opencode")
+	fakePath := testExecutablePath(tempDir, "opencode")
 	writeTestExecutable(t, fakePath, []byte(fakeOpencodeScript()))
 
 	workDir := t.TempDir()
@@ -1130,7 +1130,7 @@ func TestOpencodeBackendBlocksDirOverride(t *testing.T) {
 
 	tempDir := t.TempDir()
 	argsFile := filepath.Join(tempDir, "argv.txt")
-	fakePath := filepath.Join(tempDir, "opencode")
+	fakePath := testExecutablePath(tempDir, "opencode")
 	writeTestExecutable(t, fakePath, []byte(fakeOpencodeScript()))
 
 	workDir := t.TempDir()

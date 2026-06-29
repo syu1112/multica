@@ -95,7 +95,7 @@ describe("LocalDirectoryHint", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders the hint when a local_directory resource matches this daemon", async () => {
+  it("renders the hint when a local_directory resource exists", async () => {
     mockDaemonStatus.daemonId = "daemon-A";
     mockDaemonStatus.running = true;
     mockListResources.mockResolvedValue({
@@ -115,7 +115,7 @@ describe("LocalDirectoryHint", () => {
     expect(screen.getByText(/Users\/foo\/work/)).toBeInTheDocument();
   });
 
-  it("ignores resources pinned to a different daemon", async () => {
+  it("renders resources pinned to a different daemon", async () => {
     mockDaemonStatus.daemonId = "daemon-A";
     mockDaemonStatus.running = true;
     mockListResources.mockResolvedValue({
@@ -128,10 +128,10 @@ describe("LocalDirectoryHint", () => {
       ],
       total: 1,
     });
-    const { container } = renderHint("proj-1");
-    // Allow the query to settle; the hint should still render nothing.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(container.querySelector("div[class*='rounded-md']")).toBeNull();
+    renderHint("proj-1");
+    await waitFor(() => {
+      expect(screen.getByText("elsewhere")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Users\/foo\/other-machine/)).toBeInTheDocument();
   });
 });

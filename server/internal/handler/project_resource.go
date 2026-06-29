@@ -280,7 +280,7 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to check existing resources")
 		return
 	} else if conflict {
-		writeError(w, http.StatusConflict, "this daemon already has a local_directory attached to the project; remove it before adding another")
+		writeError(w, http.StatusConflict, "this project already has a local_directory attached; remove it before adding another")
 		return
 	}
 
@@ -382,7 +382,7 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to check existing resources")
 		return
 	} else if conflict {
-		writeError(w, http.StatusConflict, "another local_directory on this daemon is already attached to the project")
+		writeError(w, http.StatusConflict, "another local_directory is already attached to this project")
 		return
 	}
 
@@ -439,16 +439,15 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 }
 
 // findLocalDirectoryConflict enforces "at most one local_directory resource
-// per (project, daemon)". The daemon picks the first matching daemon_id row
-// out of a task's resources (findLocalDirectoryAssignment), so letting a
-// project carry two rows for the same daemon would mean the agent silently
-// writes into whichever happens to come back first — a safety hazard for a
-// feature that operates directly on the user's real working directory.
+// per project". Runtime resolution already selected the daemon allowed to
+// execute the task, and daemon_id is metadata on the resource rather than a
+// routing discriminator. Letting a project carry multiple local directories
+// would make the daemon guess which real working directory to write into.
 //
 // The DB-level UNIQUE(project_id, resource_type, resource_ref) constraint
 // alone is not enough here: it only fires on full ref-JSON equality, so a
-// different local_path or even a typoed label on the same daemon would slip
-// through. We do the daemon-scoped check here in application code instead.
+// different local_path or even a typoed label would slip
+// through. We enforce the project-scoped invariant in application code instead.
 //
 // `excludeID` lets the update path ignore the row being edited.
 func (h *Handler) findLocalDirectoryConflict(ctx context.Context, projectID pgtype.UUID, resourceType string, normalizedRef json.RawMessage, excludeID pgtype.UUID) (bool, error) {
@@ -474,13 +473,7 @@ func (h *Handler) findLocalDirectoryConflict(ctx context.Context, projectID pgty
 		if err := json.Unmarshal(row.ResourceRef, &existing); err != nil {
 			continue
 		}
-		// Daemon-scoped uniqueness: one local_directory per daemon per
-		// project. Different daemons can each carry one row (one per
-		// user device); the daemon-side resolver routes each daemon to
-		// its own assignment by daemon_id.
-		if existing.DaemonID == incoming.DaemonID {
-			return true, nil
-		}
+		return true, nil
 	}
 	return false, nil
 }

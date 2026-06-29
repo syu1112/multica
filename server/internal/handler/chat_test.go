@@ -86,6 +86,101 @@ func TestSendChatMessage_NoCompatibleRuntimeReturnsAgentUnavailable(t *testing.T
 	}
 }
 
+func TestSendChatMessage_RestoresExistingSessionRuntime(t *testing.T) {
+	ctx := context.Background()
+	const provider = "chat_restore_runtime_provider"
+
+	var firstRuntimeID, sessionRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, visibility, last_seen_at, created_at
+		)
+		VALUES ($1, 'chat-restore-first', 'Chat Restore First', 'local', $2, 'online',
+		        'first runtime', '{}'::jsonb, $3, 'private', now(), now() - interval '1 hour')
+		RETURNING id
+	`, testWorkspaceID, provider, testUserID).Scan(&firstRuntimeID); err != nil {
+		t.Fatalf("create first runtime: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, visibility, last_seen_at, created_at
+		)
+		VALUES ($1, 'chat-restore-session', 'Chat Restore Session', 'local', $2, 'online',
+		        'session runtime', '{}'::jsonb, $3, 'private', now(), now())
+		RETURNING id
+	`, testWorkspaceID, provider, testUserID).Scan(&sessionRuntimeID); err != nil {
+		t.Fatalf("create session runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id IN ($1, $2)`, firstRuntimeID, sessionRuntimeID)
+	})
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, runtime_provider, visibility, max_concurrent_tasks, owner_id,
+			instructions, custom_env, custom_args, mcp_config
+		)
+		VALUES ($1, 'Chat Restore Runtime Agent', '', 'local', '{}'::jsonb,
+			NULL, $2, 'private', 1, $3,
+			'', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+		RETURNING id
+	`, testWorkspaceID, provider, testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+	})
+
+	var sessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			workspace_id, agent_id, creator_id, title, runtime_id, session_id, work_dir
+		)
+		VALUES ($1, $2, $3, 'restore existing runtime', $4, 'provider-session-1', '/tmp/chat-restore')
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID, sessionRuntimeID).Scan(&sessionID); err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+	})
+
+	req := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "continue on the existing runtime",
+	})
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.SendChatMessage(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("SendChatMessage: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp SendChatMessageResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.TaskID == "" {
+		t.Fatal("expected task id")
+	}
+
+	var taskRuntimeID string
+	if err := testPool.QueryRow(ctx,
+		`SELECT runtime_id::text FROM agent_task_queue WHERE id = $1`,
+		resp.TaskID,
+	).Scan(&taskRuntimeID); err != nil {
+		t.Fatalf("load queued task runtime: %v", err)
+	}
+	if taskRuntimeID != sessionRuntimeID {
+		t.Fatalf("task runtime_id = %s, want existing chat session runtime %s, not first compatible runtime %s",
+			taskRuntimeID, sessionRuntimeID, firstRuntimeID)
+	}
+}
+
 // TestSendChatMessage_LinksAttachments verifies that attachments uploaded
 // against a chat_session (chat_message_id NULL) are back-filled with the
 // message_id when SendChatMessage receives the matching attachment_ids.

@@ -4,8 +4,17 @@ package agent
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func testExecutablePath(dir, name string) string {
+	if filepath.Ext(name) == "" {
+		name += ".cmd"
+	}
+	return filepath.Join(dir, name)
+}
 
 // writeTestExecutable is the Windows counterpart to the //go:build unix
 // implementation in exec_fixture_unix_test.go. ETXTBSY is a Linux/Unix
@@ -18,6 +27,17 @@ import (
 // (Codex) with attribution.
 func writeTestExecutable(tb testing.TB, path string, content []byte) {
 	tb.Helper()
+	if ext := strings.ToLower(filepath.Ext(path)); ext == ".cmd" || ext == ".bat" {
+		scriptPath := strings.TrimSuffix(path, filepath.Ext(path)) + ".sh"
+		if err := os.WriteFile(scriptPath, content, 0o755); err != nil {
+			tb.Fatalf("write test executable script %s: %v", scriptPath, err)
+		}
+		wrapper := []byte("@echo off\r\nsh \"%~dpn0.sh\" %*\r\nexit /b %ERRORLEVEL%\r\n")
+		if err := os.WriteFile(path, wrapper, 0o755); err != nil {
+			tb.Fatalf("write test executable wrapper %s: %v", path, err)
+		}
+		return
+	}
 	if err := os.WriteFile(path, content, 0o755); err != nil {
 		tb.Fatalf("write test executable %s: %v", path, err)
 	}

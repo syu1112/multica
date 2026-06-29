@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronRight,
@@ -18,9 +18,11 @@ import {
   useDeleteProjectResource,
   useUpdateProjectResource,
 } from "@multica/core/projects";
+import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import type {
+  AgentRuntime,
   GithubRepoResourceRef,
   LocalDirectoryResourceRef,
   ProjectResource,
@@ -63,6 +65,35 @@ function isLocalDirectoryRef(r: ProjectResource): r is ProjectResource & {
   return r.resource_type === "local_directory";
 }
 
+function localRuntimeLabel(runtime: AgentRuntime): string {
+  return `${runtime.name || runtime.provider} (${runtime.provider})`;
+}
+
+function basenameFromPath(path: string): string | null {
+  const trimmed = path.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return null;
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || null;
+}
+
+function onlineLocalDaemonRuntimes(runtimes: AgentRuntime[]): AgentRuntime[] {
+  const seen = new Set<string>();
+  const result: AgentRuntime[] = [];
+  for (const runtime of runtimes) {
+    if (
+      runtime.runtime_mode !== "local" ||
+      runtime.status !== "online" ||
+      !runtime.daemon_id ||
+      seen.has(runtime.daemon_id)
+    ) {
+      continue;
+    }
+    seen.add(runtime.daemon_id);
+    result.push(runtime);
+  }
+  return result;
+}
+
 export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
@@ -71,21 +102,41 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [repoSearch, setRepoSearch] = useState("");
+  const [localPathInput, setLocalPathInput] = useState("");
+  const [selectedLocalDaemonId, setSelectedLocalDaemonId] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
 
   const { data: resources = [] } = useQuery(
     projectResourcesOptions(wsId, projectId),
   );
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const createResource = useCreateProjectResource(wsId, projectId);
   const updateResource = useUpdateProjectResource(wsId, projectId);
   const deleteResource = useDeleteProjectResource(wsId, projectId);
-
-  // Desktop-only entry points. We hide (not just disable) on web so users
-  // there don't see an action they can never complete — the spec calls for
-  // read-only on web because the daemon-id check can't be performed in the
-  // browser.
   const desktopMode = isDesktopShell();
+  const localRuntimeOptions = useMemo(
+    () => onlineLocalDaemonRuntimes(runtimes),
+    [runtimes],
+  );
   const localDaemonId = daemonStatus.daemonId;
+  const canPickLocalDirectory =
+    desktopMode &&
+    daemonStatus.running &&
+    !!localDaemonId &&
+    localDaemonId === selectedLocalDaemonId;
+
+  useEffect(() => {
+    if (localRuntimeOptions.length === 0) {
+      if (selectedLocalDaemonId !== null) setSelectedLocalDaemonId(null);
+      return;
+    }
+    if (
+      !selectedLocalDaemonId ||
+      !localRuntimeOptions.some((runtime) => runtime.daemon_id === selectedLocalDaemonId)
+    ) {
+      setSelectedLocalDaemonId(localRuntimeOptions[0]?.daemon_id ?? null);
+    }
+  }, [localRuntimeOptions, selectedLocalDaemonId]);
 
   const attachedUrls = new Set(
     resources.filter(isGithubRef).map((r) => r.resource_ref.url),
@@ -93,18 +144,11 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const attachedLocalPaths = new Set(
     resources
       .filter(isLocalDirectoryRef)
-      .filter((r) => r.resource_ref.daemon_id === localDaemonId)
       .map((r) => r.resource_ref.local_path),
   );
-  // Per (project, daemon) we allow at most one local_directory — the
-  // daemon-side resolver picks the first match by daemon_id, so two rows
-  // on the same daemon would silently route the agent into one of them.
-  // The server enforces this at the API boundary; the UI mirrors the
-  // restriction by hiding the "Add" affordance once a row exists for the
-  // current daemon, otherwise users would only discover the limit on a
-  // 409 toast.
-  const hasLocalDirectoryForCurrentDaemon =
-    localDaemonId !== null && attachedLocalPaths.size > 0;
+  // A project may attach at most one local_directory. daemon_id is metadata;
+  // runtime resolution has already selected which daemon executes the task.
+  const hasLocalDirectory = attachedLocalPaths.size > 0;
 
   const repoQuery = repoSearch.trim().toLowerCase();
   const filteredRepos =
@@ -123,19 +167,64 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
     }
   };
 
+  const attachLocalDirectory = async ({
+    path,
+    daemonId,
+    label,
+  }: {
+    path: string;
+    daemonId: string;
+    label: string;
+  }) => {
+    const trimmedPath = path.trim();
+    if (!trimmedPath || !daemonId) {
+      toast.error(t(($) => $.resources.toast_local_missing_config));
+      return;
+    }
+    if (attachedLocalPaths.has(trimmedPath)) {
+      toast.error(t(($) => $.resources.toast_local_already_attached));
+      return;
+    }
+    if (hasLocalDirectory) {
+      toast.error(t(($) => $.resources.toast_local_daemon_already_attached));
+      return;
+    }
+    await createResource.mutateAsync({
+      resource_type: "local_directory",
+      resource_ref: {
+        local_path: trimmedPath,
+        daemon_id: daemonId,
+        label,
+      },
+    });
+    toast.success(t(($) => $.resources.toast_local_attached));
+    setLocalPathInput("");
+    setAddOpen(false);
+  };
+
+  const handleAttachManualLocalDirectory = async () => {
+    if (!selectedLocalDaemonId || createResource.isPending) return;
+    try {
+      await attachLocalDirectory({
+        path: localPathInput,
+        daemonId: selectedLocalDaemonId,
+        label: basenameFromPath(localPathInput) ?? localPathInput.trim(),
+      });
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : t(($) => $.resources.toast_local_pick_failed);
+      toast.error(msg);
+    }
+  };
+
   const handleAttachLocalDirectory = async () => {
     if (picking) return;
     setPicking(true);
     try {
-      if (!localDaemonId || !daemonStatus.running) {
+      if (!localDaemonId || !canPickLocalDirectory) {
         toast.error(t(($) => $.resources.toast_local_daemon_not_running));
-        return;
-      }
-      // Race guard: the button gates on this already, but if the picker
-      // is opened while a concurrent resource-create lands the user
-      // would otherwise see a 409. Surface a clearer message instead.
-      if (attachedLocalPaths.size > 0) {
-        toast.error(t(($) => $.resources.toast_local_daemon_already_attached));
         return;
       }
       const picked = await pickDirectory();
@@ -149,10 +238,6 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
       }
       const path = picked.path ?? "";
       const fallbackLabel = picked.basename ?? path;
-      if (attachedLocalPaths.has(path)) {
-        toast.error(t(($) => $.resources.toast_local_already_attached));
-        return;
-      }
       const validation = await validateLocalDirectory(path);
       if (!validation.ok) {
         toast.error(
@@ -168,16 +253,11 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
         );
         return;
       }
-      await createResource.mutateAsync({
-        resource_type: "local_directory",
-        resource_ref: {
-          local_path: path,
-          daemon_id: localDaemonId,
-          label: fallbackLabel,
-        },
+      await attachLocalDirectory({
+        path,
+        daemonId: localDaemonId,
+        label: fallbackLabel,
       });
-      toast.success(t(($) => $.resources.toast_local_attached));
-      setAddOpen(false);
     } catch (err) {
       const msg =
         err instanceof Error
@@ -348,6 +428,94 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                   setAddOpen(false);
                 }}
               />
+              <div className="space-y-2 border-t pt-2">
+                <div className="text-xs font-medium text-muted-foreground">
+                  {t(($) => $.resources.local_heading)}
+                </div>
+                {localRuntimeOptions.length > 0 ? (
+                  <>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">
+                        {t(($) => $.resources.local_runtime_label)}
+                      </span>
+                      <select
+                        value={selectedLocalDaemonId ?? ""}
+                        onChange={(e) => setSelectedLocalDaemonId(e.target.value || null)}
+                        aria-label={t(($) => $.resources.local_runtime_label)}
+                        className="h-8 w-full rounded-md border bg-background px-2 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      >
+                        {localRuntimeOptions.map((runtime) => (
+                          <option key={runtime.daemon_id ?? runtime.id} value={runtime.daemon_id ?? ""}>
+                            {localRuntimeLabel(runtime)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">
+                        {t(($) => $.resources.local_path_label)}
+                      </span>
+                      <input
+                        type="text"
+                        value={localPathInput}
+                        onChange={(e) => setLocalPathInput(e.target.value)}
+                        aria-label={t(($) => $.resources.local_path_label)}
+                        placeholder={t(($) => $.resources.local_path_placeholder)}
+                        className="h-8 w-full rounded-md border bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                      />
+                    </label>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-full justify-start px-2 text-xs text-muted-foreground hover:text-foreground"
+                      disabled={
+                        createResource.isPending ||
+                        hasLocalDirectory ||
+                        !localPathInput.trim() ||
+                        !selectedLocalDaemonId
+                      }
+                      onClick={() => {
+                        void handleAttachManualLocalDirectory();
+                      }}
+                    >
+                      <FolderOpen className="size-3" />
+                      {t(($) => $.resources.add_local_directory_button)}
+                    </Button>
+                    {desktopMode && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-full justify-start px-2 text-xs text-muted-foreground hover:text-foreground"
+                        disabled={
+                          picking ||
+                          createResource.isPending ||
+                          !canPickLocalDirectory ||
+                          hasLocalDirectory
+                        }
+                        onClick={() => {
+                          void handleAttachLocalDirectory();
+                        }}
+                      >
+                        <FolderOpen className="size-3" />
+                        {picking
+                          ? t(($) => $.resources.local_picking)
+                          : t(($) => $.resources.local_pick)}
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground">
+                    {t(($) => $.resources.local_no_runtime_hint)}
+                  </p>
+                )}
+                {hasLocalDirectory && (
+                  <p className="text-[10px] text-muted-foreground">
+                    {t(($) => $.resources.local_daemon_already_attached_hint)}
+                  </p>
+                )}
+              </div>
             </PopoverContent>
           </Popover>
           {desktopMode && (
@@ -360,7 +528,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                   picking ||
                   createResource.isPending ||
                   !daemonStatus.running ||
-                  hasLocalDirectoryForCurrentDaemon
+                  hasLocalDirectory
                 }
                 onClick={() => {
                   void handleAttachLocalDirectory();
@@ -374,7 +542,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                   {t(($) => $.resources.local_daemon_offline_hint)}
                 </p>
               )}
-              {daemonStatus.running && hasLocalDirectoryForCurrentDaemon && (
+              {daemonStatus.running && hasLocalDirectory && (
                 <p className="px-2 pt-0.5 text-[10px] text-muted-foreground">
                   {t(($) => $.resources.local_daemon_already_attached_hint)}
                 </p>

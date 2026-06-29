@@ -1323,7 +1323,7 @@ func TestCodexExecuteSurfacesStderrWhenChildExitsEarly(t *testing.T) {
 	// real os/exec stderr pipe-copy goroutine — without drainAndWait joining
 	// cmd.Wait() before sampling stderrBuf.Tail(), Result.Error would come
 	// back empty or truncated here.
-	fakePath := filepath.Join(t.TempDir(), "codex")
+	fakePath := testExecutablePath(t.TempDir(), "codex")
 	script := "#!/bin/sh\n" +
 		"echo \"error: unexpected argument '-m' found\" >&2\n" +
 		"exit 2\n"
@@ -1673,7 +1673,7 @@ func TestCodexExecuteSemanticInactivityDoesNotAffectNormalTurnCompletion(t *test
 
 func writeFakeCodexAppServer(t *testing.T, body string) string {
 	t.Helper()
-	fakePath := filepath.Join(t.TempDir(), "codex")
+	fakePath := testExecutablePath(t.TempDir(), "codex")
 	script := "#!/bin/sh\n" +
 		`if [ "$1" = "--version" ]; then echo "codex-cli 0.0.0-test"; exit 0; fi` + "\n" +
 		body
@@ -2037,6 +2037,9 @@ func TestEnsureCodexMcpConfigWritesManagedBlock(t *testing.T) {
 	fi, err := os.Stat(tmp)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if mode := fi.Mode().Perm(); mode != 0o600 {
 		t.Fatalf("expected mode 0o600 for secret-bearing config, got %o", mode)

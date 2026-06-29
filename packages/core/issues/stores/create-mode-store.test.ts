@@ -17,10 +17,10 @@ describe("openCreateIssueWithPreference", () => {
     useModalStore.getState().close();
   });
 
-  it("opens quick-create-issue when last mode is agent", () => {
+  it("opens manual create even when last mode is agent", () => {
     useCreateModeStore.getState().setLastMode("agent");
     openCreateIssueWithPreference();
-    expect(useModalStore.getState().modal).toBe("quick-create-issue");
+    expect(useModalStore.getState().modal).toBe("create-issue");
     expect(useModalStore.getState().data).toBeNull();
   });
 
@@ -30,7 +30,7 @@ describe("openCreateIssueWithPreference", () => {
     expect(useModalStore.getState().modal).toBe("create-issue");
   });
 
-  it("forwards seed data to whichever modal is opened", () => {
+  it("forwards seed data to manual create", () => {
     useCreateModeStore.getState().setLastMode("manual");
     openCreateIssueWithPreference({ project_id: "p1" });
     expect(useModalStore.getState().modal).toBe("create-issue");
@@ -38,7 +38,7 @@ describe("openCreateIssueWithPreference", () => {
 
     useCreateModeStore.getState().setLastMode("agent");
     openCreateIssueWithPreference({ project_id: "p2" });
-    expect(useModalStore.getState().modal).toBe("quick-create-issue");
+    expect(useModalStore.getState().modal).toBe("create-issue");
     expect(useModalStore.getState().data).toEqual({ project_id: "p2" });
   });
 });

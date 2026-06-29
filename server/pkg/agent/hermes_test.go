@@ -1328,7 +1328,7 @@ done
 func TestHermesBackendAttributesUsageToACPDefaultModel(t *testing.T) {
 	t.Parallel()
 
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	writeTestExecutable(t, fakePath, []byte(fakeHermesACPUsageWithDefaultModelScript()))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -1472,7 +1472,7 @@ func TestHermesProviderErrorSnifferTerminalNonRetryable(t *testing.T) {
 func TestHermesBackendPromotesProviderErrorWithNonEmptyOutput(t *testing.T) {
 	t.Parallel()
 
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	writeTestExecutable(t, fakePath, []byte(fakeHermesACPRateLimitScript()))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -1618,7 +1618,7 @@ done
 func TestHermesBackendClearsSessionIDWhenResumedSessionNotFound(t *testing.T) {
 	t.Parallel()
 
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	writeTestExecutable(t, fakePath, []byte(fakeHermesACPStaleResumeScript()))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -1695,7 +1695,7 @@ done
 func TestHermesBackendClearsSessionIDWhenSetModelSessionNotFound(t *testing.T) {
 	t.Parallel()
 
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	writeTestExecutable(t, fakePath, []byte(fakeHermesACPStaleResumeSetModelScript()))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -1779,7 +1779,7 @@ done
 func TestHermesBackendDoesNotPromoteOnTransientRetry(t *testing.T) {
 	t.Parallel()
 
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	writeTestExecutable(t, fakePath, []byte(fakeHermesACPTransientRetryScript()))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -1952,7 +1952,7 @@ func TestHermesExecuteFailsClosedOnMalformedMcpConfig(t *testing.T) {
 	t.Parallel()
 
 	// Any existing executable is fine — Execute returns before the spawn.
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	writeTestExecutable(t, fakePath, []byte("#!/bin/sh\nexit 0\n"))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -1986,8 +1986,9 @@ func TestHermesExecuteFailsClosedOnMalformedMcpConfig(t *testing.T) {
 // tests don't need to thread one through; session/prompt returns
 // end_turn so Execute completes cleanly.
 func fakeACPRecordingScript(recordPath, sessionID, caps string) string {
+	recordPath = strings.ReplaceAll(filepath.ToSlash(recordPath), `'`, `'\''`)
 	return `#!/bin/sh
-RECORD_PATH=` + recordPath + `
+RECORD_PATH='` + recordPath + `'
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$RECORD_PATH"
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
@@ -2040,7 +2041,7 @@ func TestHermesSetModelPreservesCustomModelIDWithColon(t *testing.T) {
 	t.Parallel()
 
 	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_new", `{}`)))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -2091,7 +2092,7 @@ func TestHermesResumeIncludesMcpServers(t *testing.T) {
 	t.Parallel()
 
 	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_resume", `{}`)))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
@@ -2145,7 +2146,7 @@ func TestHermesDropsRemoteMcpWhenCapabilityNotAdvertised(t *testing.T) {
 	t.Parallel()
 
 	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	// agentCapabilities = {} → neither http nor sse advertised.
 	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_new", `{}`)))
 
@@ -2198,7 +2199,7 @@ func TestHermesKeepsRemoteMcpWhenCapabilityAdvertised(t *testing.T) {
 	t.Parallel()
 
 	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
-	fakePath := filepath.Join(t.TempDir(), "hermes")
+	fakePath := testExecutablePath(t.TempDir(), "hermes")
 	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_new", `{"mcpCapabilities":{"http":true,"sse":true}}`)))
 
 	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})

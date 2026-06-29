@@ -219,21 +219,21 @@ func TestQuickCreateRuntimeVersionGate(t *testing.T) {
 		t.Fatal("MinVersion is empty")
 	}
 }
-func TestRuntimeResolverExplicitChoiceUsesAgentOwnerForSquad(t *testing.T) {
+func TestRuntimeResolverRejectsExplicitChoiceOwnedByAgentOwner(t *testing.T) {
 	workspaceID := testUUID(1)
-	requesterID := testUUID(2)     // 用户 A（issue 创建者）
-	agentOwnerID := testUUID(3)    // 用户 B（squad leader agent 的 owner）
-	squadLeaderRuntimeID := testUUID(4) // 用户 B 的运行时
+	requesterID := testUUID(2)
+	agentOwnerID := testUUID(3)
+	agentOwnerRuntimeID := testUUID(4)
 
 	resolver := RuntimeResolver{
 		GetRuntime: func(ctx context.Context, id pgtype.UUID) (db.AgentRuntime, error) {
-			if id != squadLeaderRuntimeID {
-				t.Fatalf("runtime lookup = %v, want %v", id, squadLeaderRuntimeID)
+			if id != agentOwnerRuntimeID {
+				t.Fatalf("runtime lookup = %v, want %v", id, agentOwnerRuntimeID)
 			}
 			return db.AgentRuntime{
-				ID:          squadLeaderRuntimeID,
+				ID:          agentOwnerRuntimeID,
 				WorkspaceID: workspaceID,
-				OwnerID:     agentOwnerID, // 运行时属于 B
+				OwnerID:     agentOwnerID,
 				RuntimeMode: "local",
 				Provider:    "codex",
 				Status:      "online",
@@ -241,30 +241,23 @@ func TestRuntimeResolverExplicitChoiceUsesAgentOwnerForSquad(t *testing.T) {
 		},
 	}
 
-	// 用户 A 创建 issue 分配给 squad leader B，选择 B 的运行时
-	// AgentOwnerID=B 应当允许该选择，尽管 RequesterUserID=A ≠ B
-	runtime, err := resolver.Resolve(context.Background(), RuntimeResolveInput{
+	_, err := resolver.Resolve(context.Background(), RuntimeResolveInput{
 		WorkspaceID:         workspaceID,
 		Agent:               db.Agent{RuntimeProvider: "codex"},
 		RequesterUserID:     requesterID,
-		AgentOwnerID:        agentOwnerID, // squad leader agent 的 owner = B
-		ExplicitRuntimeID:   squadLeaderRuntimeID,
+		ExplicitRuntimeID:   agentOwnerRuntimeID,
 		AllowExplicitChoice: true,
 	})
-	if err != nil {
-		t.Fatalf("Resolve returned error for squad leader runtime selection: %v", err)
-	}
-	if runtime.ID != squadLeaderRuntimeID {
-		t.Fatalf("resolved runtime = %v, want squad leader runtime %v", runtime.ID, squadLeaderRuntimeID)
+	if !errors.Is(err, ErrRuntimeNotFound) {
+		t.Fatalf("Resolve error = %v, want ErrRuntimeNotFound", err)
 	}
 }
 
-func TestRuntimeResolverRejectsExplicitChoiceWhenAgentOwnerMismatch(t *testing.T) {
+func TestRuntimeResolverRejectsExplicitChoiceOwnedByAnotherUser(t *testing.T) {
 	workspaceID := testUUID(1)
 	requesterID := testUUID(2)
-	agentOwnerID := testUUID(3)       // agent owner = B
-	otherUserID := testUUID(4)        // 用户 C
-	otherRuntimeID := testUUID(5)     // C 的运行时
+	otherUserID := testUUID(4)
+	otherRuntimeID := testUUID(5)
 
 	resolver := RuntimeResolver{
 		GetRuntime: func(ctx context.Context, id pgtype.UUID) (db.AgentRuntime, error) {
@@ -274,7 +267,7 @@ func TestRuntimeResolverRejectsExplicitChoiceWhenAgentOwnerMismatch(t *testing.T
 			return db.AgentRuntime{
 				ID:          otherRuntimeID,
 				WorkspaceID: workspaceID,
-				OwnerID:     otherUserID, // 运行时属于 C
+				OwnerID:     otherUserID,
 				RuntimeMode: "local",
 				Provider:    "codex",
 				Status:      "online",
@@ -282,21 +275,19 @@ func TestRuntimeResolverRejectsExplicitChoiceWhenAgentOwnerMismatch(t *testing.T
 		},
 	}
 
-	// 设置 AgentOwnerID=B，但运行时属于 C（既不是 A 也不是 B）
 	_, err := resolver.Resolve(context.Background(), RuntimeResolveInput{
 		WorkspaceID:         workspaceID,
 		Agent:               db.Agent{RuntimeProvider: "codex"},
 		RequesterUserID:     requesterID,
-		AgentOwnerID:        agentOwnerID,
 		ExplicitRuntimeID:   otherRuntimeID,
 		AllowExplicitChoice: true,
 	})
 	if !errors.Is(err, ErrRuntimeNotFound) {
-		t.Fatalf("Resolve error = %v, want ErrRuntimeNotFound (runtime belongs to neither requester nor agent owner)", err)
+		t.Fatalf("Resolve error = %v, want ErrRuntimeNotFound", err)
 	}
 }
 
-func TestRuntimeResolverExplicitChoiceFallsBackToRequesterWhenNoAgentOwner(t *testing.T) {
+func TestRuntimeResolverExplicitChoiceUsesRequester(t *testing.T) {
 	workspaceID := testUUID(1)
 	requesterID := testUUID(2)
 	requesterRuntimeID := testUUID(3)
@@ -309,7 +300,7 @@ func TestRuntimeResolverExplicitChoiceFallsBackToRequesterWhenNoAgentOwner(t *te
 			return db.AgentRuntime{
 				ID:          requesterRuntimeID,
 				WorkspaceID: workspaceID,
-				OwnerID:     requesterID, // 运行时属于 requester
+				OwnerID:     requesterID,
 				RuntimeMode: "local",
 				Provider:    "codex",
 				Status:      "online",
@@ -317,12 +308,10 @@ func TestRuntimeResolverExplicitChoiceFallsBackToRequesterWhenNoAgentOwner(t *te
 		},
 	}
 
-	// 非 squad 场景：AgentOwnerID 未设置，应使用 RequesterUserID 校验
 	runtime, err := resolver.Resolve(context.Background(), RuntimeResolveInput{
 		WorkspaceID:         workspaceID,
 		Agent:               db.Agent{RuntimeProvider: "codex"},
 		RequesterUserID:     requesterID,
-		// AgentOwnerID: 留空（零值）
 		ExplicitRuntimeID:   requesterRuntimeID,
 		AllowExplicitChoice: true,
 	})

@@ -266,14 +266,14 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 
 	// Pre-validate every resource payload before opening a transaction so an
 	// invalid ref produces a clean 400 with no DB work. For local_directory we
-	// also enforce one row per daemon_id within the batch — the daemon-side
-	// resolver picks the first match by daemon_id, so two rows on the same
-	// daemon would silently route the agent into whichever sorts first.
+	// also enforce one row within the batch: daemon_id is metadata, not a
+	// routing discriminator, so multiple local directories would make task
+	// execution ambiguous.
 	// The standalone POST/PUT paths run the same check via
 	// findLocalDirectoryConflict; this loop just covers the bundled-create
 	// surface, where there is no existing row to compare against yet.
 	normalizedRefs := make([]json.RawMessage, len(req.Resources))
-	localDirSeen := map[string]int{}
+	localDirSeen := -1
 	for i, res := range req.Resources {
 		res.ResourceType = strings.TrimSpace(res.ResourceType)
 		if res.ResourceType == "" {
@@ -287,16 +287,11 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		normalizedRefs[i] = ref
 		if res.ResourceType == "local_directory" {
-			var ld localDirectoryRef
-			if err := json.Unmarshal(ref, &ld); err != nil {
-				writeError(w, http.StatusBadRequest, "resources["+strconv.Itoa(i)+"]: "+err.Error())
+			if localDirSeen >= 0 {
+				writeError(w, http.StatusBadRequest, "resources["+strconv.Itoa(i)+"]: duplicate local_directory (already at index "+strconv.Itoa(localDirSeen)+"); each project may attach at most one local_directory")
 				return
 			}
-			if prev, ok := localDirSeen[ld.DaemonID]; ok {
-				writeError(w, http.StatusBadRequest, "resources["+strconv.Itoa(i)+"]: duplicate local_directory for daemon (already at index "+strconv.Itoa(prev)+"); each daemon may attach at most one local_directory per project")
-				return
-			}
-			localDirSeen[ld.DaemonID] = i
+			localDirSeen = i
 		}
 	}
 

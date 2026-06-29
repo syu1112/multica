@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -474,7 +473,7 @@ func TestDiscoverOpenCodeModelsFallsBackWhenVerboseFails(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	fake := filepath.Join(dir, "opencode")
+	fake := testExecutablePath(dir, "opencode")
 	script := `#!/bin/sh
 if [ "$1" = "models" ] && [ "$2" = "--verbose" ]; then
   exit 2
@@ -650,7 +649,7 @@ func TestDiscoverPiModelsNonZeroExit(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fakePath := filepath.Join(t.TempDir(), "pi")
+			fakePath := testExecutablePath(t.TempDir(), "pi")
 			writeTestExecutable(t, fakePath, []byte(tc.script))
 
 			models, err := discoverPiModels(context.Background(), fakePath)
@@ -685,7 +684,7 @@ func TestDiscoverOpenCodeModelsFallsBackOnVerboseNoise(t *testing.T) {
 		"fi\n" +
 		"echo 'openai/gpt-4o'\n"
 
-	fakePath := filepath.Join(t.TempDir(), "opencode")
+	fakePath := testExecutablePath(t.TempDir(), "opencode")
 	writeTestExecutable(t, fakePath, []byte(script))
 
 	models, err := discoverOpenCodeModels(context.Background(), fakePath)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -150,7 +149,7 @@ func TestCodebuddyExecute_Success(t *testing.T) {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
 
-	fakePath := filepath.Join(t.TempDir(), "codebuddy")
+	fakePath := testExecutablePath(t.TempDir(), "codebuddy")
 	script := "#!/bin/sh\n" +
 		"IFS= read -r _\n" +
 		`printf '%s\n' '{"type":"system","session_id":"sess-cb-001"}'` + "\n" +
@@ -226,7 +225,7 @@ func TestCodebuddyExecuteSurfacesStderr(t *testing.T) {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
 
-	fakePath := filepath.Join(t.TempDir(), "codebuddy")
+	fakePath := testExecutablePath(t.TempDir(), "codebuddy")
 	script := "#!/bin/sh\n" +
 		"IFS= read -r _\n" +
 		"echo \"FATAL ERROR: segfault in codebuddy runtime\" >&2\n" +
@@ -374,11 +373,11 @@ Options:
 	}
 	checks := map[string]string{
 		"gpt-5.5":                "openai",
-		"gemini-3.1-pro":        "google",
-		"glm-5.1-ioa":           "zhipu",
-		"minimax-m2.7-ioa":      "minimax",
-		"kimi-k2.6-ioa":         "kimi",
-		"hy3-preview-ioa":       "hunyuan",
+		"gemini-3.1-pro":         "google",
+		"glm-5.1-ioa":            "zhipu",
+		"minimax-m2.7-ioa":       "minimax",
+		"kimi-k2.6-ioa":          "kimi",
+		"hy3-preview-ioa":        "hunyuan",
 		"deepseek-v3-2-volc-ioa": "deepseek",
 	}
 	for id, want := range checks {

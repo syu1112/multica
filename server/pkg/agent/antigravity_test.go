@@ -31,7 +31,7 @@ func TestBuildAntigravityArgsBasic(t *testing.T) {
 		"--dangerously-skip-permissions",
 		"--print-timeout", "20m0s",
 		"--log-file", "/tmp/agy.log",
-		"--add-dir", "/work",
+		"--add-dir", filepath.Clean("/work"),
 	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("buildAntigravityArgs basic mismatch\n got: %v\nwant: %v", args, want)
@@ -58,7 +58,7 @@ func TestBuildAntigravityArgsModel(t *testing.T) {
 		"--model", "Claude Opus 4.6 (Thinking)",
 		"--print-timeout", "20m0s",
 		"--log-file", "/tmp/agy.log",
-		"--add-dir", "/work",
+		"--add-dir", filepath.Clean("/work"),
 	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("buildAntigravityArgs with model mismatch\n got: %v\nwant: %v", args, want)
@@ -89,7 +89,7 @@ func TestBuildAntigravityArgsNoTimeoutOmitsPrintTimeout(t *testing.T) {
 		"-p", "hello",
 		"--dangerously-skip-permissions",
 		"--log-file", "/tmp/agy.log",
-		"--add-dir", "/work",
+		"--add-dir", filepath.Clean("/work"),
 	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("buildAntigravityArgs(timeout=0) mismatch\n got: %v\nwant: %v", args, want)

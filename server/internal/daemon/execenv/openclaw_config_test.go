@@ -317,6 +317,7 @@ func TestPrepareOpenclawConfigExpandsTilde(t *testing.T) {
 
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
+	t.Setenv("USERPROFILE", fakeHome)
 	if err := os.MkdirAll(filepath.Join(fakeHome, ".openclaw"), 0o755); err != nil {
 		t.Fatalf("mkdir home/.openclaw: %v", err)
 	}

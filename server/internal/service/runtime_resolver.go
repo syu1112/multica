@@ -31,13 +31,6 @@ type RuntimeResolveInput struct {
 	WorkspaceID         pgtype.UUID
 	Agent               db.Agent
 	RequesterUserID     pgtype.UUID
-	// AgentOwnerID 是 agent 的 OwnerID。在 squad 场景中，agent owner 可能
-	// 与 requester（issue 创建者/触发者）不同。设置此字段后，resolver 在
-	// explicit choice 路径中优先使用 AgentOwnerID 校验 runtime 归属，
-	// 而不是 RequesterUserID，使得 requester A 可以为 squad leader B
-	// 选择 B 的运行时。
-	// 非 squad 场景留空（零值），保持原有 RequesterUserID 校验行为。
-	AgentOwnerID        pgtype.UUID
 	ExplicitRuntimeID   pgtype.UUID
 	AllowExplicitChoice bool
 }
@@ -79,13 +72,7 @@ func (r RuntimeResolver) Resolve(ctx context.Context, input RuntimeResolveInput)
 		if rt.WorkspaceID != input.WorkspaceID {
 			return db.AgentRuntime{}, ErrRuntimeNotFound
 		}
-		// 确定应校验的 owner：AgentOwnerID 优先（squad 场景），
-		// 回退到 RequesterUserID（非 squad 场景保持原有行为）。
-		expectedOwner := input.RequesterUserID
-		if input.AgentOwnerID.Valid {
-			expectedOwner = input.AgentOwnerID
-		}
-		if rt.OwnerID != expectedOwner {
+		if rt.OwnerID != input.RequesterUserID {
 			return db.AgentRuntime{}, ErrRuntimeNotFound
 		}
 		if rt.RuntimeMode != "local" || rt.Status != "online" {

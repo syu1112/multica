@@ -1220,25 +1220,17 @@ func logClaimEndpointSlow(runtimeID, outcome string, start time.Time, authMs, cl
 	)
 }
 
-// filterProjectResourcesForRuntime wraps listProjectResourcesForProject and
-// filters out local_directory resources whose daemon_id doesn't match the
-// runtime's current daemon_id (or its legacy daemon_id). This prevents a
-// daemon from receiving another daemon's local_directory resource in a
-// runtime-decoupled deployment.
+// filterProjectResourcesForRuntime wraps listProjectResourcesForProject. The
+// current runtime-decoupled design treats local_directory.daemon_id as
+// metadata, not as a routing filter: runtime resolution has already selected
+// which daemon is allowed to claim the task, and the daemon should receive the
+// project context the user attached.
 func (h *Handler) filterProjectResourcesForRuntime(ctx context.Context, projectID pgtype.UUID, runtime db.AgentRuntime) []db.ProjectResource {
 	rows := h.listProjectResourcesForProject(ctx, projectID)
 	if len(rows) == 0 {
 		return nil
 	}
-  	// local_directory is a project-level resource that multiple daemons may
-  	// need to access. In a runtime-decoupled deployment, the task's resolved
-  	// runtime may correspond to a different daemon than the one that created
-  	// the local_directory resource. Rather than filtering by daemon_id here
-  	// (which would hide the resource from other daemons), we return all
-  	// project resources. The daemon-side findLocalDirectoryAssignment already
-  	// filters by daemon_id, so it will only pick up the resource assigned to
-  	// its own daemon.
-  	return rows
+	return rows
 }
 
 // ClaimTaskByRuntime atomically claims the next queued task for a runtime.
@@ -1641,7 +1633,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				if issue, err := h.Queries.GetIssue(r.Context(), cs.IssueID); err == nil && issue.ProjectID.Valid {
 					resp.ProjectID = uuidToString(issue.ProjectID)
 					if proj, err := h.Queries.GetProject(r.Context(), issue.ProjectID); err == nil {
-					resp.ProjectTitle = proj.Title
+						resp.ProjectTitle = proj.Title
 					}
 					if rows := h.filterProjectResourcesForRuntime(r.Context(), issue.ProjectID, runtime); len(rows) > 0 {
 						out := make([]ProjectResourceData, 0, len(rows))
@@ -1661,7 +1653,9 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 								Label:        label,
 							})
 							if row.ResourceType == "github_repo" {
-								var payload struct{ URL string `json:"url"` }
+								var payload struct {
+									URL string `json:"url"`
+								}
 								if json.Unmarshal(row.ResourceRef, &payload) == nil && payload.URL != "" {
 									resp.Repos = append(resp.Repos, RepoData{URL: payload.URL})
 								}
@@ -1700,45 +1694,46 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 						if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
 							resp.Repos = repos
 						}
-
-			// If the autopilot run is linked to an issue, load its project
-			// resources (local_directory, repos, etc.) so the daemon can
-			// write code in the correct local directory.
-			if run.IssueID.Valid {
-				if issue, err := h.Queries.GetIssue(r.Context(), run.IssueID); err == nil && issue.ProjectID.Valid {
-					resp.ProjectID = uuidToString(issue.ProjectID)
-					if proj, err := h.Queries.GetProject(r.Context(), issue.ProjectID); err == nil {
-						resp.ProjectTitle = proj.Title
-					}
-					if rows := h.filterProjectResourcesForRuntime(r.Context(), issue.ProjectID, runtime); len(rows) > 0 {
-						out := make([]ProjectResourceData, 0, len(rows))
-						for _, row := range rows {
-							label := ""
-							if row.Label.Valid {
-								label = row.Label.String
-							}
-							ref := json.RawMessage(row.ResourceRef)
-							if len(ref) == 0 {
-								ref = json.RawMessage("{}")
-							}
-							out = append(out, ProjectResourceData{
-								ID:           uuidToString(row.ID),
-								ResourceType: row.ResourceType,
-								ResourceRef:  ref,
-								Label:        label,
-							})
-							if row.ResourceType == "github_repo" {
-								var payload struct{ URL string `json:"url"` }
-								if json.Unmarshal(row.ResourceRef, &payload) == nil && payload.URL != "" {
-									resp.Repos = append(resp.Repos, RepoData{URL: payload.URL})
-								}
-							}
-						}
-						resp.ProjectResources = out
 					}
 				}
-			}
 
+				// If the autopilot run is linked to an issue, load its project
+				// resources (local_directory, repos, etc.) so the daemon can
+				// write code in the correct local directory.
+				if run.IssueID.Valid {
+					if issue, err := h.Queries.GetIssue(r.Context(), run.IssueID); err == nil && issue.ProjectID.Valid {
+						resp.ProjectID = uuidToString(issue.ProjectID)
+						if proj, err := h.Queries.GetProject(r.Context(), issue.ProjectID); err == nil {
+							resp.ProjectTitle = proj.Title
+						}
+						if rows := h.filterProjectResourcesForRuntime(r.Context(), issue.ProjectID, runtime); len(rows) > 0 {
+							out := make([]ProjectResourceData, 0, len(rows))
+							for _, row := range rows {
+								label := ""
+								if row.Label.Valid {
+									label = row.Label.String
+								}
+								ref := json.RawMessage(row.ResourceRef)
+								if len(ref) == 0 {
+									ref = json.RawMessage("{}")
+								}
+								out = append(out, ProjectResourceData{
+									ID:           uuidToString(row.ID),
+									ResourceType: row.ResourceType,
+									ResourceRef:  ref,
+									Label:        label,
+								})
+								if row.ResourceType == "github_repo" {
+									var payload struct {
+										URL string `json:"url"`
+									}
+									if json.Unmarshal(row.ResourceRef, &payload) == nil && payload.URL != "" {
+										resp.Repos = append(resp.Repos, RepoData{URL: payload.URL})
+									}
+								}
+							}
+							resp.ProjectResources = out
+						}
 					}
 				}
 			}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { Agent, AgentRuntime, MemberWithUser, Squad } from "@multica/core/types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,6 +108,9 @@ const runtimes: AgentRuntime[] = [
   },
 ];
 
+let squadQueryData: Squad[] = [];
+let squadRuntimeQueryData: Array<{ id: string; name: string }> = [];
+
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
@@ -133,7 +136,7 @@ vi.mock("@multica/core/workspace/queries", () => ({
   }),
   squadListOptions: () => ({
     queryKey: ["squads"],
-    queryFn: () => Promise.resolve([] satisfies Squad[]),
+    queryFn: () => Promise.resolve(squadQueryData),
   }),
   assigneeFrequencyOptions: () => ({
     queryKey: ["assignee-frequency"],
@@ -148,10 +151,21 @@ vi.mock("@multica/core/runtimes/queries", () => ({
   }),
 }));
 
+vi.mock("@multica/core/squads", () => ({
+  squadLeaderRuntimeOptions: (_wsId: string, squadId: string) => ({
+    queryKey: ["squads", squadId, "leader-compatible-runtimes"],
+    queryFn: () => Promise.resolve(squadRuntimeQueryData),
+  }),
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorName: (type: string, id: string) =>
-      type === "agent" && id === "agent-1" ? "Codex Agent" : "Unknown",
+      type === "agent" && id === "agent-1"
+        ? "Codex Agent"
+        : type === "squad" && id === "squad-1"
+          ? "Frontend Squad"
+          : "Unknown",
   }),
 }));
 
@@ -181,6 +195,8 @@ function renderPicker(onUpdate = vi.fn()) {
 describe("AssigneePicker runtime selection", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
+    squadQueryData = [];
+    squadRuntimeQueryData = [];
   });
 
   it("lets users choose among multiple compatible owned runtimes when assigning an agent", async () => {
@@ -200,6 +216,77 @@ describe("AssigneePicker runtime selection", () => {
       assignee_type: "agent",
       assignee_id: "agent-1",
       runtime_id: "rt-2",
+    });
+  });
+
+  it("lets users choose among current-user squad leader compatible runtimes when assigning a squad", async () => {
+    squadQueryData = [
+      {
+        id: "squad-1",
+        workspace_id: "ws-1",
+        name: "Frontend Squad",
+        description: "",
+        instructions: "",
+        avatar_url: null,
+        leader_id: "agent-1",
+        creator_id: "user-1",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        archived_at: null,
+        archived_by: null,
+      },
+    ];
+    squadRuntimeQueryData = [
+      { id: "rt-1", name: "Laptop" },
+      { id: "rt-2", name: "Desktop" },
+    ];
+    const onUpdate = renderPicker();
+
+    fireEvent.click(screen.getByText("Assignee"));
+    fireEvent.click(await screen.findByText("Frontend Squad"));
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(await screen.findByText("Laptop")).toBeInTheDocument();
+    expect(screen.getByText("Desktop")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Desktop"));
+
+    expect(onUpdate).toHaveBeenCalledWith({
+      assignee_type: "squad",
+      assignee_id: "squad-1",
+      runtime_id: "rt-2",
+    });
+  });
+
+  it("auto-selects the only current-user compatible runtime when assigning a squad", async () => {
+    squadQueryData = [
+      {
+        id: "squad-1",
+        workspace_id: "ws-1",
+        name: "Frontend Squad",
+        description: "",
+        instructions: "",
+        avatar_url: null,
+        leader_id: "agent-1",
+        creator_id: "user-1",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        archived_at: null,
+        archived_by: null,
+      },
+    ];
+    squadRuntimeQueryData = [{ id: "rt-1", name: "Laptop" }];
+    const onUpdate = renderPicker();
+
+    fireEvent.click(screen.getByText("Assignee"));
+    fireEvent.click(await screen.findByText("Frontend Squad"));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith({
+        assignee_type: "squad",
+        assignee_id: "squad-1",
+        runtime_id: "rt-1",
+      });
     });
   });
 });

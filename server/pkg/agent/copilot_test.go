@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -660,7 +659,7 @@ func TestCopilotExecuteSurfacesStderrOnNonZeroResult(t *testing.T) {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
 
-	fakePath := filepath.Join(t.TempDir(), "copilot")
+	fakePath := testExecutablePath(t.TempDir(), "copilot")
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' '{\"type\":\"result\",\"sessionId\":\"sess-fail\",\"exitCode\":1}'\n" +
 		"echo \"error: authentication failed: refresh token expired\" >&2\n" +

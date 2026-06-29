@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
 // TestCLIConfig_BackwardCompat_OldFileLoadsWithNilBackends verifies that a
 // config.json written by an older daemon (no `backends` key at all) loads
 // correctly into the new schema, with Backends == nil. This is the most
@@ -15,7 +21,7 @@ import (
 // continue to work byte-for-byte.
 func TestCLIConfig_BackwardCompat_OldFileLoadsWithNilBackends(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	setTestHome(t, tmp)
 
 	// Write a 4-field config exactly as the historical daemon would have.
 	cfgDir := filepath.Join(tmp, ".multica")
@@ -55,7 +61,7 @@ func TestCLIConfig_BackwardCompat_OldFileLoadsWithNilBackends(t *testing.T) {
 // an older daemon doesn't trip on an empty `backends: null` line.
 func TestCLIConfig_BackwardCompat_NilBackendsOmittedFromJSON(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	setTestHome(t, tmp)
 
 	cfg := CLIConfig{
 		ServerURL: "https://api.multica.ai",
@@ -87,7 +93,7 @@ func TestCLIConfig_BackwardCompat_NilBackendsOmittedFromJSON(t *testing.T) {
 // and StateDir survives a save/load cycle.
 func TestCLIConfig_OpenClawOverride_RoundTrip(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	setTestHome(t, tmp)
 
 	original := CLIConfig{
 		ServerURL: "https://api.multica.ai",
@@ -128,7 +134,7 @@ func TestCLIConfig_OpenClawOverride_RoundTrip(t *testing.T) {
 // without an empty string overriding env-var precedence.
 func TestCLIConfig_OpenClawOverride_PartialFieldsOmitted(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	setTestHome(t, tmp)
 
 	cfg := CLIConfig{
 		ServerURL: "https://api.multica.ai",
@@ -173,7 +179,7 @@ func TestCLIConfig_OpenClawOverride_PartialFieldsOmitted(t *testing.T) {
 // load->modify->save cycle never dropping config the user already had.
 func TestCLIConfig_ProfileCommandOverrides_RoundTrip(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	setTestHome(t, tmp)
 
 	original := CLIConfig{
 		ServerURL:   "https://api.multica.ai",
@@ -232,7 +238,7 @@ func TestCLIConfig_ProfileCommandOverrides_RoundTrip(t *testing.T) {
 // set, so configs for users who never pin a path stay byte-stable.
 func TestCLIConfig_ProfileCommandOverrides_OmittedWhenEmpty(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	setTestHome(t, tmp)
 
 	cfg := CLIConfig{ServerURL: "https://api.multica.ai", Token: "mul_xyz"}
 	if err := SaveCLIConfig(cfg); err != nil {
@@ -265,7 +271,7 @@ func TestCLIConfig_UnknownFieldsArePreserved(t *testing.T) {
 	t.Skip("documenting known limitation: encoding/json drops unknown fields on round-trip; future PR can switch to a preserving encoder")
 
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	setTestHome(t, tmp)
 
 	cfgDir := filepath.Join(tmp, ".multica")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {

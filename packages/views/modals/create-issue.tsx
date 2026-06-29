@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -6,7 +6,6 @@ import { useNavigation } from "../navigation";
 import {
   AlertTriangle,
   ArrowDown,
-  ArrowLeftRight,
   ArrowUp,
   CalendarClock,
   Check,
@@ -43,7 +42,6 @@ import { useAuthStore } from "@multica/core/auth";
 import { firstCompatibleRuntimeForAgent } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
-import { useCreateModeStore } from "@multica/core/issues/stores/create-mode-store";
 import { useQuickCreateStore } from "@multica/core/issues/stores/quick-create-store";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
@@ -88,7 +86,7 @@ export function manualCreateSubmitDisabled({
 }
 
 // ---------------------------------------------------------------------------
-// ManualCreatePanel — manual-mode body of the create-issue dialog. Renders
+// ManualCreatePanel - manual-mode body of the create-issue dialog. Renders
 // DialogContent + everything inside; the surrounding `<Dialog>` is owned by
 // CreateIssueDialog so mode switching swaps only the inner panel without
 // remounting the Dialog Root (no overlay flash). `onSwitchMode` flips the
@@ -97,7 +95,6 @@ export function manualCreateSubmitDisabled({
 
 export function ManualCreatePanel({
   onClose,
-  onSwitchMode,
   data,
   isExpanded,
   setIsExpanded,
@@ -125,7 +122,6 @@ export function ManualCreatePanel({
   const setDraft = useIssueDraftStore((s) => s.setDraft);
   const clearDraft = useIssueDraftStore((s) => s.clearDraft);
   const setLastAssignee = useIssueDraftStore((s) => s.setLastAssignee);
-  const setLastMode = useCreateModeStore((s) => s.setLastMode);
   const keepOpen = useQuickCreateStore((s) => s.keepOpen);
   const setKeepOpen = useQuickCreateStore((s) => s.setKeepOpen);
 
@@ -159,12 +155,12 @@ export function ManualCreatePanel({
     (data?.parent_issue_id as string) || undefined,
   );
   const [parentPickerOpen, setParentPickerOpen] = useState(false);
-  // Start date is a low-frequency field — by default it lives in the
-  // overflow ⋯ menu. Clicking the menu item flips this open, which both
+  // Start date is a low-frequency field - by default it lives in the
+  // overflow ? menu. Clicking the menu item flips this open, which both
   // mounts the inline pill (the popover's anchor) AND opens the calendar.
   // When the popover closes without a value set, the pill unmounts again.
   const [startDatePickerOpen, setStartDatePickerOpen] = useState(false);
-  // Children live as full Issue objects — the picker always returns the whole
+  // Children live as full Issue objects - the picker always returns the whole
   // object, and we never need to hydrate from an ID the way we do for parent.
   const [childIssues, setChildIssues] = useState<Issue[]>([]);
   const [childPickerOpen, setChildPickerOpen] = useState(false);
@@ -186,7 +182,7 @@ export function ManualCreatePanel({
   // earlier editing session. Runs once on mount: at that point the persisted
   // description IS the draft body (no editor edits have happened yet), so
   // dropping unreferenced records is safe. Don't prune on description updates
-  // — an onUpdate flush can race a just-finished upload whose markdown link
+  // - an onUpdate flush can race a just-finished upload whose markdown link
   // hasn't been inserted yet, and pruning there would drop a live attachment.
   useEffect(() => {
     const { draft: current } = useIssueDraftStore.getState();
@@ -318,7 +314,7 @@ export function ManualCreatePanel({
 
       // Link queued children to the new parent. Deferred to after create
       // because the new issue's ID doesn't exist yet. Partial failures don't
-      // roll back the new issue — it's already committed.
+      // roll back the new issue - it's already committed.
       if (childIssues.length > 0) {
         const results = await Promise.allSettled(
           childIssues.map((child) =>
@@ -351,7 +347,6 @@ export function ManualCreatePanel({
       }
 
       setLastAssignee(assigneeType, assigneeId);
-      setLastMode("manual");
       clearDraft();
       const shouldShowBacklogHint =
         status === "backlog" && assigneeType === "agent" && assigneeId &&
@@ -376,7 +371,7 @@ export function ManualCreatePanel({
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground ml-7">
               <StatusIcon status={issue.status} className="size-3.5 shrink-0" />
-              <span className="truncate">{issue.identifier} – {issue.title}</span>
+              <span className="truncate">{issue.identifier} - {issue.title}</span>
             </div>
             <button
               type="button"
@@ -416,7 +411,7 @@ export function ManualCreatePanel({
                   </span>
                 </div>
                 <div className="flex items-center gap-2 text-sm text-muted-foreground ml-7">
-                  <span className="truncate">{dup.issue.identifier} – {dup.issue.title}</span>
+                  <span className="truncate">{dup.issue.identifier} - {dup.issue.title}</span>
                 </div>
                 <button
                   type="button"
@@ -443,51 +438,6 @@ export function ManualCreatePanel({
     } finally {
       setSubmitting(false);
     }
-  };
-
-  // Switch to agent mode. Hand the typed text up to the shell as the carry
-  // payload; the shell stores it as the next panel's `data` so the agent
-  // panel reads `data.prompt` on mount. Concatenate title + description so
-  // nothing the user typed is lost — the agent derives a fresh title from
-  // the combined text. Persist the mode flip so the next `c` lands in agent.
-  // Also forward the picked project so the agent panel pins the new issue
-  // to it; without this the agent panel would fall back to its persisted
-  // `lastProjectId`, silently routing the issue to the wrong project.
-  // Forward squad picks alongside agent picks so the agent panel honors
-  // the actor the user already chose — otherwise a squad selection silently
-  // falls back to the persisted actor / first visible agent on flip.
-  // parent_issue_id rides through the same carry channel: the modal opener
-  // (openCreateSubIssue) seeded it on the manual panel, and the agent panel
-  // needs it so the new issue is still created as a sub-issue when the user
-  // flips from "Add sub issue" → "Create with agent".
-  const switchToAgent = () => {
-    const desc = descEditorRef.current?.getMarkdown()?.trim() ?? "";
-    const prompt = [title.trim(), desc].filter(Boolean).join("\n\n");
-    // Title + description have been packed into the agent prompt — clear them
-    // from the shared draft so a later agent→manual switch doesn't surface
-    // stale manual state on top of the prompt-as-description, which would
-    // duplicate content on every round-trip.
-    setDraft({ title: "", description: "" });
-    setLastMode("agent");
-    // Prefer the hydrated identifier from `parentIssue`, but fall back to the
-    // identifier the modal opener seeded on `data`. Without the fallback, a
-    // flip that happens before the issue detail query resolves drops the
-    // identifier and the agent chip renders as "Sub-issue of " with an empty
-    // tail. The UUID alone still wires the sub-issue relationship correctly;
-    // this only affects the display affordance.
-    const carryParentIdentifier =
-      parentIssue?.identifier ?? (data?.parent_issue_identifier as string | undefined);
-    onSwitchMode?.({
-      prompt,
-      ...(assigneeId && assigneeType === "agent"
-        ? { agent_id: assigneeId }
-        : assigneeId && assigneeType === "squad"
-          ? { squad_id: assigneeId }
-          : {}),
-      ...(projectId ? { project_id: projectId } : {}),
-      ...(parentIssueId ? { parent_issue_id: parentIssueId } : {}),
-      ...(carryParentIdentifier ? { parent_issue_identifier: carryParentIdentifier } : {}),
-    });
   };
 
   return (
@@ -577,7 +527,7 @@ export function ManualCreatePanel({
               />
             </div>
 
-            {/* Description — takes remaining space */}
+            {/* Description - takes remaining space */}
             <div {...descDropZoneProps} className="relative flex flex-1 min-h-0 overflow-y-auto px-5">
               <ContentEditor
                 ref={descEditorRef}
@@ -652,7 +602,7 @@ export function ManualCreatePanel({
                 align="start"
               />
 
-              {/* Start date — collapsed into the ⋯ menu by default since it's
+              {/* Start date - collapsed into the ? menu by default since it's
                   a low-frequency field. Renders inline only when the field
                   has a value OR the user just opened it from the overflow
                   menu (the picker's calendar popover needs the inline pill
@@ -668,9 +618,9 @@ export function ManualCreatePanel({
                 />
               )}
 
-              {/* Parent chip — appears when parent is set.
-                  Placed before the ⋯ so it wraps to a new line with ⋯ if
-                  space is tight, but ⋯ always stays last in DOM order. */}
+              {/* Parent chip - appears when parent is set.
+                  Placed before the ? so it wraps to a new line with ? if
+                  space is tight, but ? always stays last in DOM order. */}
               {parentIssueId && parentIssue && (
                 <div className="inline-flex items-center rounded-full border text-xs transition-colors hover:bg-accent/60">
                   <button
@@ -694,7 +644,7 @@ export function ManualCreatePanel({
                 </div>
               )}
 
-              {/* Child chips — one per queued sub-issue. Links are deferred
+              {/* Child chips - one per queued sub-issue. Links are deferred
                   until create resolves (see handleSubmit). */}
               {childIssues.map((c) => (
                 <div
@@ -718,7 +668,7 @@ export function ManualCreatePanel({
                 </div>
               ))}
 
-              {/* Overflow — always the last child so DOM order keeps it at the
+              {/* Overflow - always the last child so DOM order keeps it at the
                   end of the wrap flow, no matter how many chips are present. */}
               <DropdownMenu>
                 <DropdownMenuTrigger
@@ -766,7 +716,7 @@ export function ManualCreatePanel({
               </DropdownMenu>
             </div>
 
-            {/* Parent / child pickers — rendered inline so they stack over this
+            {/* Parent / child pickers - rendered inline so they stack over this
                 modal instead of replacing it via useModalStore. */}
             <IssuePickerModal
               open={parentPickerOpen}
@@ -805,15 +755,6 @@ export function ManualCreatePanel({
                 />
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={switchToAgent}
-                  title={t(($) => $.create_issue.switch_to_agent_tooltip)}
-                  className="border-beam group flex shrink-0 items-center gap-1.5 text-xs px-2 py-1 rounded-sm text-muted-foreground bg-brand/5 hover:bg-brand/10 hover:text-foreground transition-colors cursor-pointer"
-                >
-                  <ArrowLeftRight className="size-3.5 text-brand/80 transition-transform duration-300 group-hover:rotate-180" />
-                  {t(($) => $.create_issue.switch_to_agent)}
-                </button>
                 <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
                   <Switch
                     size="sm"
@@ -856,7 +797,7 @@ export function ManualCreatePanel({
   );
 }
 
-/** className for DialogContent in manual mode — depends on isExpanded and the
+/** className for DialogContent in manual mode - depends on isExpanded and the
  *  backlog-hint sub-state. Exported so the shell (which now owns the
  *  DialogContent) can apply the same visual treatment without duplicating it. */
 export function manualDialogContentClass(
@@ -877,7 +818,7 @@ export function manualDialogContentClass(
   );
 }
 
-// Thin Dialog-wrapping export — registry mounts the panel directly under the
+// Thin Dialog-wrapping export - registry mounts the panel directly under the
 // shell's shared Dialog, but a few legacy callers (and the test suite) still
 // import this module's modal version. Equivalent runtime behavior to the
 // pre-refactor component when used standalone.

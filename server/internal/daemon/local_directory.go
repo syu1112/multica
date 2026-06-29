@@ -16,7 +16,7 @@ import (
 // localDirectoryResourceType is the project_resource discriminator the daemon
 // looks for when deciding whether a task should run against an existing
 // user directory rather than a fresh git worktree. Mirrors the server-side
-// constant — keep in sync if the type string is ever renamed.
+// constant; keep in sync if the type string is ever renamed.
 const localDirectoryResourceType = "local_directory"
 
 // localDirectoryRef mirrors the server-side ref shape for local_directory
@@ -40,20 +40,15 @@ type localDirectoryAssignment struct {
 	RealPath string // canonical key for the path mutex
 }
 
-// findLocalDirectoryAssignment scans the task's project resources for one of
-// type local_directory whose daemon_id matches this daemon. Returns nil
-// (without error) when no such resource exists — the task takes the regular
-// github_repo / worktree code path. Returns an error only when the matching
-// resource is structurally broken (bad JSON, missing fields) OR when more
-// than one resource is pinned to this daemon — that's a server-side
-// invariant violation, and silently picking the first match would let the
-// agent write into an arbitrary directory the user didn't intend.
-//
-// Server-side `findLocalDirectoryConflict` enforces a single local_directory
-// per (project, daemon), so two matches here means either the constraint
-// was bypassed (older API client) or the data was corrupted. Either way,
-// fail fast rather than guess.
-func findLocalDirectoryAssignment(resources []ProjectResourceData, daemonID string) (*localDirectoryAssignment, error) {
+// findLocalDirectoryAssignment scans the task's project resources for a
+// local_directory resource. Runtime resolution already selected the daemon
+// allowed to execute this task, so daemon_id is treated as metadata instead of
+// an ownership filter. Returns nil when no local_directory resource exists and
+// the task should take the regular github_repo / worktree path. Returns an
+// error when the resource is structurally broken or when multiple
+// local_directory resources are present, because silently picking one could
+// route writes into a directory the user did not intend.
+func findLocalDirectoryAssignment(resources []ProjectResourceData) (*localDirectoryAssignment, error) {
 	var match *localDirectoryAssignment
 	for _, r := range resources {
 		if r.ResourceType != localDirectoryResourceType {
@@ -67,19 +62,9 @@ func findLocalDirectoryAssignment(resources []ProjectResourceData, daemonID stri
 		if ref.DaemonID == "" {
 			return nil, errors.New("local_directory: resource_ref missing daemon_id")
 		}
-		if ref.DaemonID != daemonID {
-			// A different daemon owns this resource. Skip silently; the
-			// project may have multiple local_directory resources, one
-			// per daemon, and other daemons will resolve their own row.
-			continue
-		}
 		if match != nil {
-			// Server-side invariant: at most one local_directory per
-			// (project, daemon). Two matches here means the constraint
-			// was bypassed by an older API client or by direct DB writes.
-			// Either way, refuse to guess which directory the user meant.
 			return nil, fmt.Errorf(
-				"local_directory: project has multiple local_directory resources for this daemon (%q and %q); remove the extra in project settings",
+				"local_directory: project has multiple local_directory resources (%q and %q); remove the extra in project settings",
 				match.AbsPath,
 				strings.TrimSpace(ref.LocalPath),
 			)
@@ -103,7 +88,7 @@ func findLocalDirectoryAssignment(resources []ProjectResourceData, daemonID stri
 
 // normalizeLocalPath strips whitespace and resolves the path to an absolute
 // cleaned form. It does NOT touch the filesystem (no symlink resolution, no
-// existence check) — callers do that separately via validateLocalPath.
+// existence check); callers do that separately via validateLocalPath.
 func normalizeLocalPath(p string) (string, error) {
 	trimmed := strings.TrimSpace(p)
 	if trimmed == "" {

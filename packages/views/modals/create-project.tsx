@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { ChevronRight, FolderOpen, Maximize2, Minimize2, Search, X as XIcon, UserMinus } from "lucide-react";
 
 /**
@@ -24,6 +24,7 @@ function GithubIcon({ className }: { className?: string }) {
 import { useQuery } from "@tanstack/react-query";
 import { useCreateProject } from "@multica/core/projects/mutations";
 import { useProjectDraftStore } from "@multica/core/projects";
+import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import {
   PROJECT_STATUS_CONFIG,
   PROJECT_STATUS_ORDER,
@@ -33,7 +34,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
-import type { ProjectStatus, ProjectPriority } from "@multica/core/types";
+import type { AgentRuntime, ProjectStatus, ProjectPriority } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -110,6 +111,35 @@ function RepoUrlText({
   );
 }
 
+function localRuntimeLabel(runtime: AgentRuntime): string {
+  return `${runtime.name || runtime.provider} (${runtime.provider})`;
+}
+
+function basenameFromPath(path: string): string | null {
+  const trimmed = path.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return null;
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || null;
+}
+
+function onlineLocalDaemonRuntimes(runtimes: AgentRuntime[]): AgentRuntime[] {
+  const seen = new Set<string>();
+  const result: AgentRuntime[] = [];
+  for (const runtime of runtimes) {
+    if (
+      runtime.runtime_mode !== "local" ||
+      runtime.status !== "online" ||
+      !runtime.daemon_id ||
+      seen.has(runtime.daemon_id)
+    ) {
+      continue;
+    }
+    seen.add(runtime.daemon_id);
+    result.push(runtime);
+  }
+  return result;
+}
+
 export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const { t } = useT("modals");
   const router = useNavigation();
@@ -119,6 +149,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { getActorName } = useActorName();
   const projectStatusLabels = useProjectStatusLabels();
   const projectPriorityLabels = useProjectPriorityLabels();
@@ -158,11 +189,37 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   // is hidden entirely on web (no daemon to bind the path to).
   const desktop = isDesktopShell();
   const daemonStatus = useLocalDaemonStatus();
+  const localRuntimeOptions = useMemo(
+    () => onlineLocalDaemonRuntimes(runtimes),
+    [runtimes],
+  );
   const [sourceMode, setSourceMode] = useState<"repos" | "local">("repos");
   const [selectedLocalPath, setSelectedLocalPath] = useState<string | null>(null);
   const [selectedLocalLabel, setSelectedLocalLabel] = useState<string | null>(null);
+  const [selectedLocalDaemonId, setSelectedLocalDaemonId] = useState<string | null>(null);
   const [localPickError, setLocalPickError] = useState<string | null>(null);
   const [localPicking, setLocalPicking] = useState(false);
+  const selectedLocalRuntime = localRuntimeOptions.find(
+    (runtime) => runtime.daemon_id === selectedLocalDaemonId,
+  );
+  const canPickLocalDirectory =
+    desktop &&
+    daemonStatus.running &&
+    !!daemonStatus.daemonId &&
+    daemonStatus.daemonId === selectedLocalDaemonId;
+
+  useEffect(() => {
+    if (localRuntimeOptions.length === 0) {
+      if (selectedLocalDaemonId !== null) setSelectedLocalDaemonId(null);
+      return;
+    }
+    if (
+      !selectedLocalDaemonId ||
+      !localRuntimeOptions.some((runtime) => runtime.daemon_id === selectedLocalDaemonId)
+    ) {
+      setSelectedLocalDaemonId(localRuntimeOptions[0]?.daemon_id ?? null);
+    }
+  }, [localRuntimeOptions, selectedLocalDaemonId]);
 
   const handleSourceModeChange = (mode: "repos" | "local") => {
     setSourceMode(mode);
@@ -170,7 +227,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   };
 
   const handlePickLocalDirectory = async () => {
-    if (localPicking) return;
+    if (localPicking || !canPickLocalDirectory) return;
     setLocalPickError(null);
     setLocalPicking(true);
     try {
@@ -200,6 +257,12 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const clearLocalDirectory = () => {
     setSelectedLocalPath(null);
     setSelectedLocalLabel(null);
+    setLocalPickError(null);
+  };
+
+  const updateManualLocalPath = (value: string) => {
+    setSelectedLocalPath(value);
+    setSelectedLocalLabel(basenameFromPath(value));
     setLocalPickError(null);
   };
 
@@ -240,18 +303,20 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
         resource_type: "github_repo" as const,
         resource_ref: { url },
       }));
-    } else if (
-      sourceMode === "local" &&
-      selectedLocalPath &&
-      daemonStatus.daemonId
-    ) {
+    } else if (sourceMode === "local") {
+      const localPath = selectedLocalPath?.trim();
+      if (!localPath || !selectedLocalDaemonId) {
+        toast.error(t(($) => $.create_project.local_missing_config));
+        return;
+      }
+      const localLabel = selectedLocalLabel ?? basenameFromPath(localPath);
       resources = [
         {
           resource_type: "local_directory" as const,
           resource_ref: {
-            local_path: selectedLocalPath,
-            daemon_id: daemonStatus.daemonId,
-            ...(selectedLocalLabel ? { label: selectedLocalLabel } : {}),
+            local_path: localPath,
+            daemon_id: selectedLocalDaemonId,
+            ...(localLabel ? { label: localLabel } : {}),
           },
         },
       ];
@@ -571,38 +636,32 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
               }
             />
             <PopoverContent side="top" align="start" className="w-72 p-2 space-y-2">
-              {/* Source mode is binary — repo OR local directory, never both.
-                  Local option is desktop-only because a local_directory
-                  resource has to be pinned to a daemon_id, which doesn't
-                  exist on the web. */}
-              {desktop && (
-                <div className="grid grid-cols-2 gap-1 rounded-md bg-muted/60 p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => handleSourceModeChange("repos")}
-                    className={cn(
-                      "rounded px-2 py-1 text-xs transition-colors",
-                      sourceMode === "repos"
-                        ? "bg-background shadow-sm font-medium"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {t(($) => $.create_project.source_tab_repos)}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSourceModeChange("local")}
-                    className={cn(
-                      "rounded px-2 py-1 text-xs transition-colors",
-                      sourceMode === "local"
-                        ? "bg-background shadow-sm font-medium"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {t(($) => $.create_project.source_tab_local)}
-                  </button>
-                </div>
-              )}
+              <div className="grid grid-cols-2 gap-1 rounded-md bg-muted/60 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => handleSourceModeChange("repos")}
+                  className={cn(
+                    "rounded px-2 py-1 text-xs transition-colors",
+                    sourceMode === "repos"
+                      ? "bg-background shadow-sm font-medium"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {t(($) => $.create_project.source_tab_repos)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSourceModeChange("local")}
+                  className={cn(
+                    "rounded px-2 py-1 text-xs transition-colors",
+                    sourceMode === "local"
+                      ? "bg-background shadow-sm font-medium"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {t(($) => $.create_project.source_tab_local)}
+                </button>
+              </div>
 
               {sourceMode === "repos" ? (
                 <>
@@ -711,20 +770,56 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                   <div className="text-xs font-medium text-muted-foreground">
                     {t(($) => $.create_project.local_heading)}
                   </div>
-                  {/* Daemon must be online — daemon_id is required to bind
-                      the resource. If it's offline, surface why and disable
-                      the picker; once it boots we re-render automatically
-                      via useLocalDaemonStatus. */}
-                  {daemonStatus.daemonId && daemonStatus.running ? (
+                  {/* local_directory resources bind to the selected local
+                      runtime's daemon_id. Web users enter the path manually;
+                      desktop users can also use the directory picker. */}
+                  {localRuntimeOptions.length > 0 ? (
                     <p className="text-[11px] text-muted-foreground">
                       {t(($) => $.create_project.local_on_device, {
-                        device: daemonStatus.deviceName ?? t(($) => $.create_project.local_this_machine),
+                        device: selectedLocalRuntime
+                          ? localRuntimeLabel(selectedLocalRuntime)
+                          : t(($) => $.create_project.local_this_machine),
                       })}
                     </p>
                   ) : (
                     <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                      {t(($) => $.create_project.local_daemon_offline)}
+                      {t(($) => $.create_project.local_no_runtime)}
                     </p>
+                  )}
+
+                  {localRuntimeOptions.length > 0 && (
+                    <>
+                      <label className="space-y-1 text-xs">
+                        <span className="text-muted-foreground">
+                          {t(($) => $.create_project.local_runtime_label)}
+                        </span>
+                        <select
+                          value={selectedLocalDaemonId ?? ""}
+                          onChange={(e) => setSelectedLocalDaemonId(e.target.value || null)}
+                          aria-label={t(($) => $.create_project.local_runtime_label)}
+                          className="h-8 w-full rounded-md border bg-background px-2 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        >
+                          {localRuntimeOptions.map((runtime) => (
+                            <option key={runtime.daemon_id ?? runtime.id} value={runtime.daemon_id ?? ""}>
+                              {localRuntimeLabel(runtime)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="space-y-1 text-xs">
+                        <span className="text-muted-foreground">
+                          {t(($) => $.create_project.local_path_label)}
+                        </span>
+                        <input
+                          type="text"
+                          value={selectedLocalPath ?? ""}
+                          onChange={(e) => updateManualLocalPath(e.target.value)}
+                          aria-label={t(($) => $.create_project.local_path_label)}
+                          placeholder={t(($) => $.create_project.local_path_placeholder)}
+                          className="h-8 w-full rounded-md border bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                        />
+                      </label>
+                    </>
                   )}
 
                   {selectedLocalPath ? (
@@ -754,26 +849,26 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                         variant="ghost"
                         className="h-6 w-full text-xs"
                         onClick={handlePickLocalDirectory}
-                        disabled={localPicking || !daemonStatus.running}
+                        disabled={localPicking || !canPickLocalDirectory}
                       >
                         {t(($) => $.create_project.local_change)}
                       </Button>
                     </div>
-                  ) : (
+                  ) : desktop ? (
                     <Button
                       type="button"
                       size="sm"
                       variant="outline"
                       className="w-full text-xs"
                       onClick={handlePickLocalDirectory}
-                      disabled={localPicking || !daemonStatus.running}
+                      disabled={localPicking || !canPickLocalDirectory}
                     >
                       <FolderOpen className="size-3" />
                       {localPicking
                         ? t(($) => $.create_project.local_picking)
                         : t(($) => $.create_project.local_pick)}
                     </Button>
-                  )}
+                  ) : null}
 
                   {localPickError && (
                     <p className="text-[11px] text-destructive">{localPickError}</p>
@@ -791,7 +886,12 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
           <Button
             size="sm"
             onClick={handleSubmit}
-            disabled={!title.trim() || submitting}
+            disabled={
+              !title.trim() ||
+              submitting ||
+              (sourceMode === "local" &&
+                (!selectedLocalPath?.trim() || !selectedLocalDaemonId))
+            }
             className="shrink-0"
           >
             {submitting ? t(($) => $.create_project.submitting) : t(($) => $.create_project.submit)}

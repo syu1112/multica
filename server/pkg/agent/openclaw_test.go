@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -1494,7 +1493,7 @@ func TestOpenclawExecuteRejectsOldVersion(t *testing.T) {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
 
-	fakePath := filepath.Join(t.TempDir(), "openclaw")
+	fakePath := testExecutablePath(t.TempDir(), "openclaw")
 	script := "#!/bin/sh\n" +
 		"if [ \"$1\" = \"--version\" ]; then\n" +
 		"  echo 'openclaw 2026.4.9 abc123'\n" +
@@ -1534,7 +1533,7 @@ func TestOpenclawExecuteAllowsCurrentVersion(t *testing.T) {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
 
-	fakePath := filepath.Join(t.TempDir(), "openclaw")
+	fakePath := testExecutablePath(t.TempDir(), "openclaw")
 	script := "#!/bin/sh\n" +
 		"if [ \"$1\" = \"--version\" ]; then\n" +
 		"  echo 'openclaw 2026.5.5 c37871e'\n" +

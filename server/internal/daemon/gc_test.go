@@ -177,8 +177,12 @@ func TestShouldCleanTaskDir_NoMetaOldOrphan(t *testing.T) {
 	t.Parallel()
 
 	d := newGCTestDaemon(t, http.NewServeMux())
-	d.cfg.GCOrphanTTL = 0 // treat all orphans as expired
+	d.cfg.GCOrphanTTL = time.Hour
 	taskDir := createTaskDir(t, d.cfg.WorkspacesRoot, "ws1", "task6", nil)
+	old := time.Now().Add(-2 * d.cfg.GCOrphanTTL)
+	if err := os.Chtimes(taskDir, old, old); err != nil {
+		t.Fatalf("backdate task dir: %v", err)
+	}
 
 	action := d.shouldCleanTaskDir(context.Background(), taskDir)
 	if action != gcActionOrphan {

@@ -562,7 +562,10 @@ func TestLoadConfig_CodexDesktopFallbackDoesNotOverrideExplicitPath(t *testing.T
 	t.Setenv("MULTICA_CODEX_PATH", filepath.Join(t.TempDir(), "missing-codex"))
 	pinNonCodexAgentsToMissingPaths(t)
 	fakeClaude := filepath.Join(t.TempDir(), "claude")
-	if err := os.WriteFile(fakeClaude, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if runtime.GOOS == "windows" {
+		fakeClaude += ".cmd"
+	}
+	if err := os.WriteFile(fakeClaude, []byte("@echo off\nexit /b 0\n"), 0o755); err != nil {
 		t.Fatalf("write fake claude: %v", err)
 	}
 	t.Setenv("MULTICA_CLAUDE_PATH", fakeClaude)
@@ -608,7 +611,7 @@ func pinNonCodexAgentsToMissingPaths(t *testing.T) {
 func writeCLIConfigForProfile(t *testing.T, profile string, cfg cli.CLIConfig) {
 	t.Helper()
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	setDaemonTestHome(t, tmp)
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
 		t.Fatalf("write cli config: %v", err)
 	}
@@ -753,7 +756,7 @@ func TestLoadConfig_AppliesBackendOverridesFromConfigFile(t *testing.T) {
 	// Drop a CLI config under the user's HOME (already pointed at TempDir
 	// by stageFakeAgent's t.Setenv chain — but reassert here for clarity).
 	homeForCLIConfig := t.TempDir()
-	t.Setenv("HOME", homeForCLIConfig)
+	setDaemonTestHome(t, homeForCLIConfig)
 	cfg := cli.CLIConfig{
 		ServerURL: "http://localhost:8080",
 		Backends: &cli.BackendOverrides{
@@ -795,7 +798,7 @@ func TestLoadConfig_BackendOverrides_BackwardCompat_NoConfigFile(t *testing.T) {
 	stageFakeAgent(t)
 
 	// Point HOME at an empty dir — no config.json present.
-	t.Setenv("HOME", t.TempDir())
+	setDaemonTestHome(t, t.TempDir())
 	os.Unsetenv("MULTICA_OPENCLAW_PATH")
 	os.Unsetenv("OPENCLAW_STATE_DIR")
 	t.Cleanup(func() {
@@ -824,7 +827,7 @@ func TestLoadConfig_BackendOverrides_BackwardCompat_NoConfigFile(t *testing.T) {
 func TestLoadConfig_BackendOverrides_MalformedConfigFileNonFatal(t *testing.T) {
 	stageFakeAgent(t)
 	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
+	setDaemonTestHome(t, homeDir)
 
 	// Write malformed JSON.
 	cfgDir := filepath.Join(homeDir, ".multica")
