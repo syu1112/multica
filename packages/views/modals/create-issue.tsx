@@ -34,7 +34,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@multi
 import { Button } from "@multica/ui/components/ui/button";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { ContentEditor, type ContentEditorRef, TitleEditor, useFileDropZone, FileDropOverlay } from "../editor";
-import { StatusIcon, StatusPicker, PriorityPicker, AssigneePicker, StartDatePicker, DueDatePicker } from "../issues/components";
+import { StatusIcon, StatusPicker, PriorityPicker, RuntimeChoicePicker, AssigneePicker, StartDatePicker, DueDatePicker } from "../issues/components";
 import { BacklogAgentHintContent } from "../issues/components/backlog-agent-hint-dialog";
 import { ProjectPicker } from "../projects/components/project-picker";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
@@ -573,17 +573,13 @@ export function ManualCreatePanel({
               />
 
               {(assigneeType === "agent" || assigneeType === "squad") && compatibleRuntimes.length > 0 && (
-                <select
+                <RuntimeChoicePicker
+                  runtimes={compatibleRuntimes}
                   value={selectedRuntimeId}
-                  onChange={(event) => setSelectedRuntimeId(event.target.value)}
-                  className="h-7 rounded-sm border border-border bg-background px-2 text-xs text-foreground"
-                >
-                  {compatibleRuntimes.map((runtime) => (
-                    <option key={runtime.id} value={runtime.id}>
-                      {runtime.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setSelectedRuntimeId}
+                  triggerRender={<PillButton />}
+                  align="start"
+                />
               )}
 
               {/* Due date */}

@@ -162,6 +162,37 @@ vi.mock("../common/actor-avatar", () => ({
 
 vi.mock("../issues/components", () => ({
   PriorityPicker: () => <div data-testid="priority-picker" />,
+  RuntimeChoicePicker: ({
+    runtimes,
+    value,
+    onChange,
+  }: {
+    runtimes: Array<{ id: string; name: string }>;
+    value: string;
+    onChange: (id: string) => void;
+  }) => {
+    const [open, setOpen] = useState(false);
+    const selected = runtimes.find((runtime) => runtime.id === value) ?? runtimes[0];
+    return (
+      <>
+        <button type="button" onClick={() => setOpen((next) => !next)}>
+          {selected?.name}
+        </button>
+        {open && runtimes.map((runtime) => (
+          <button
+            key={runtime.id}
+            type="button"
+            onClick={() => {
+              onChange(runtime.id);
+              setOpen(false);
+            }}
+          >
+            {runtime.name}
+          </button>
+        ))}
+      </>
+    );
+  },
   DueDatePicker: () => <div data-testid="due-date-picker" />,
 }));
 
@@ -458,9 +489,8 @@ describe("AgentCreatePanel", () => {
 
     renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
 
-    const runtimeSelect = screen.getByLabelText("Runtime");
-    expect(runtimeSelect).toHaveValue("runtime-1");
-    await user.selectOptions(runtimeSelect, "runtime-2");
+    await user.click(screen.getByRole("button", { name: "Runtime One" }));
+    await user.click(screen.getByRole("button", { name: "Runtime Two" }));
 
     const editor = screen.getByPlaceholderText(
       'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',

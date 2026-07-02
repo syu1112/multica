@@ -32,6 +32,7 @@ import { ActorAvatar } from "../common/actor-avatar";
 import { PillButton } from "../common/pill-button";
 import { ProjectPicker } from "../projects/components/project-picker";
 import { canAssignAgent } from "../issues/components/pickers/assignee-picker";
+import { RuntimeChoicePicker } from "../issues/components";
 import {
   PropertyPicker,
   PickerItem,
@@ -538,18 +539,14 @@ export function AgentCreatePanel({
             align="start"
           />
           {selectedAgent && compatibleRuntimes.length > 1 && (
-            <select
-              aria-label={t(($) => $.create_issue.agent.runtime_label)}
+            <RuntimeChoicePicker
+              ariaLabel={t(($) => $.create_issue.agent.runtime_label)}
+              runtimes={compatibleRuntimes}
               value={selectedRuntime?.id ?? ""}
-              onChange={(event) => setSelectedRuntimeId(event.target.value)}
-              className="h-7 rounded-sm border border-border bg-background px-2 text-xs text-foreground"
-            >
-              {compatibleRuntimes.map((runtime) => (
-                <option key={runtime.id} value={runtime.id}>
-                  {runtime.name}
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedRuntimeId}
+              triggerRender={<PillButton />}
+              align="start"
+            />
           )}
           {parentIssueId && (
             <span

@@ -280,6 +280,37 @@ vi.mock("../issues/components", () => ({
   StatusIcon: ({ status }: { status: string }) => <span data-testid="status-icon">{status}</span>,
   StatusPicker: () => <div data-testid="status-picker" />,
   PriorityPicker: () => <div data-testid="priority-picker" />,
+  RuntimeChoicePicker: ({
+    runtimes,
+    value,
+    onChange,
+  }: {
+    runtimes: Array<{ id: string; name: string }>;
+    value: string;
+    onChange: (id: string) => void;
+  }) => {
+    const [open, setOpen] = useState(false);
+    const selected = runtimes.find((runtime) => runtime.id === value) ?? runtimes[0];
+    return (
+      <>
+        <button type="button" onClick={() => setOpen((next) => !next)}>
+          {selected?.name}
+        </button>
+        {open && runtimes.map((runtime) => (
+          <button
+            key={runtime.id}
+            type="button"
+            onClick={() => {
+              onChange(runtime.id);
+              setOpen(false);
+            }}
+          >
+            {runtime.name}
+          </button>
+        ))}
+      </>
+    );
+  },
   AssigneePicker: () => <div data-testid="assignee-picker" />,
   // Surface open/onOpenChange so tests can assert progressive-disclosure
   // behavior (mounted only when the user has opted in or has a value).
@@ -810,7 +841,7 @@ describe("squad runtime selector", () => {
     mockDraftStore.draft.startDate = null;
     mockDraftStore.draft.dueDate = null;
   });
-  it("shows runtime dropdown when squad has compatible leader agent runtimes", async () => {
+  it("shows runtime picker when squad has compatible leader agent runtimes", async () => {
     mockDraftStore.draft.assigneeType = "squad";
     mockDraftStore.draft.assigneeId = "squad-1";
 
@@ -827,10 +858,8 @@ describe("squad runtime selector", () => {
     );
 
     await waitFor(() => {
-      const select = screen.getByRole("combobox");
-      expect(select).toBeInTheDocument();
-      expect(select).toHaveValue("runtime-1");
-      expect(screen.getByText("Runtime One")).toBeInTheDocument();
+      expect(screen.queryByRole("combobox")).toBeNull();
+      expect(screen.getByRole("button", { name: "Runtime One" })).toBeTruthy();
     });
   });
 
@@ -852,9 +881,10 @@ describe("squad runtime selector", () => {
     );
 
     await user.type(screen.getByPlaceholderText("Issue title"), "Squad issue");
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByText("Runtime One")).toBeNull();
     const submitBtn = screen.getByRole("button", { name: "Create Issue" });
-    expect(submitBtn).toBeDisabled();
+    expect(submitBtn).toHaveProperty("disabled", true);
   });
 
   it("submits with default selected runtime_id when squad is assigned", async () => {
@@ -926,10 +956,8 @@ describe("squad runtime selector", () => {
 
     await user.type(screen.getByPlaceholderText("Issue title"), "Squad with manual runtime");
 
-    await waitFor(() => {
-      expect(screen.getByRole("combobox")).toBeInTheDocument();
-    });
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "runtime-2" } });
+    await user.click(await screen.findByRole("button", { name: "Runtime One" }));
+    await user.click(screen.getByRole("button", { name: "Runtime Two" }));
 
     await user.click(screen.getByRole("button", { name: "Create Issue" }));
 

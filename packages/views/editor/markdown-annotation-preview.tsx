@@ -37,6 +37,7 @@ interface MarkdownAnnotationPreviewProps {
   filename: string;
   content: string;
   issueId?: string | null;
+  replyToCommentId?: string | null;
   attachments?: Attachment[];
   className?: string;
 }
@@ -284,6 +285,7 @@ export function MarkdownAnnotationPreview({
   filename,
   content,
   issueId,
+  replyToCommentId,
   className,
 }: MarkdownAnnotationPreviewProps) {
   const { t } = useT("editor");
@@ -292,6 +294,7 @@ export function MarkdownAnnotationPreview({
   const [note, setNote] = useState("");
   const [annotations, setAnnotations] = useState<MarkdownAnnotationDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const isReply = !!replyToCommentId;
   const components = useMemo(
     () => buildMarkdownComponents(content, annotations),
     [content, annotations],
@@ -333,12 +336,17 @@ export function MarkdownAnnotationPreview({
     if (!issueId || annotations.length === 0 || submitting) return;
     setSubmitting(true);
     try {
-      await api.createComment(issueId, formatMarkdownAnnotationsComment(filename, annotations));
+      await api.createComment(
+        issueId,
+        formatMarkdownAnnotationsComment(filename, annotations),
+        undefined,
+        replyToCommentId ?? undefined,
+      );
       setAnnotations([]);
       setPending(null);
-      toast.success(t(($) => $.annotation.sent));
+      toast.success(t(($) => isReply ? $.annotation.replied : $.annotation.sent));
     } catch {
-      toast.error(t(($) => $.annotation.send_failed));
+      toast.error(t(($) => isReply ? $.annotation.reply_failed : $.annotation.send_failed));
     } finally {
       setSubmitting(false);
     }
@@ -369,32 +377,43 @@ export function MarkdownAnnotationPreview({
               onClick={sendAnnotations}
             >
               <Send className="size-3.5" />
-              {t(($) => $.annotation.send_to_comments)}
+              {t(($) => isReply ? $.annotation.reply_to_comment : $.annotation.send_to_comments)}
             </button>
           </div>
         </div>
       )}
 
       {pending && (
-        <div className="border-b border-border bg-muted/30 px-4 py-3">
+        <div
+          className="border-y border-orange-200 bg-orange-50/80 px-4 py-3 dark:border-orange-500/30 dark:bg-orange-950/20"
+          data-testid="markdown-annotation-note-panel"
+        >
           <div className="mb-2 flex items-center gap-2 text-sm font-medium">
-            <MessageSquarePlus className="size-4" />
+            <MessageSquarePlus className="size-4 text-orange-600 dark:text-orange-300" />
             {t(($) => $.annotation.add)}
           </div>
-          <blockquote className="mb-2 max-h-20 overflow-hidden border-l-2 border-border pl-3 text-sm text-muted-foreground">
+          <blockquote className="mb-2 max-h-20 overflow-hidden border-l-2 border-orange-300 pl-3 text-sm text-muted-foreground dark:border-orange-400/60">
             {pending.quote}
           </blockquote>
           <textarea
-            className="min-h-20 w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+            className="min-h-20 w-full resize-y rounded-md border border-orange-200 bg-orange-100/70 px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-orange-300 dark:border-orange-500/40 dark:bg-orange-900/20 dark:focus:ring-orange-500/50"
             placeholder={t(($) => $.annotation.note_placeholder)}
             value={note}
             onChange={(event) => setNote(event.target.value)}
           />
           <div className="mt-2 flex justify-end gap-2">
-            <button type="button" className="rounded-md px-2 py-1 text-sm hover:bg-muted" onClick={() => setPending(null)}>
+            <button
+              type="button"
+              className="rounded-md bg-orange-200 px-2 py-1 text-sm text-orange-950 hover:bg-orange-300 dark:bg-orange-700/45 dark:text-orange-50 dark:hover:bg-orange-700/65"
+              onClick={() => setPending(null)}
+            >
               {t(($) => $.annotation.cancel)}
             </button>
-            <button type="button" className="rounded-md border border-border px-2 py-1 text-sm" onClick={savePending}>
+            <button
+              type="button"
+              className="rounded-md border border-orange-300 bg-orange-200 px-2 py-1 text-sm text-orange-950 hover:bg-orange-300 dark:border-orange-500/50 dark:bg-orange-700/45 dark:text-orange-50 dark:hover:bg-orange-700/65"
+              onClick={savePending}
+            >
               {t(($) => $.annotation.save)}
             </button>
           </div>
@@ -422,11 +441,17 @@ export function MarkdownAnnotationPreview({
       </div>
 
       {enabled && annotations.length > 0 && (
-        <div className="max-h-44 overflow-auto border-t border-border bg-muted/20 px-4 py-3">
-          <div className="mb-2 text-sm font-medium">{t(($) => $.annotation.list_title)}</div>
+        <div
+          className="max-h-44 overflow-auto border-t border-orange-200 bg-orange-50/80 px-4 py-3 dark:border-orange-500/30 dark:bg-orange-950/20"
+          data-testid="markdown-annotation-list-panel"
+        >
+          <div className="mb-2 text-sm font-medium text-orange-950 dark:text-orange-50">{t(($) => $.annotation.list_title)}</div>
           <ol className="space-y-2 text-sm">
             {annotations.map((annotation) => (
-              <li key={annotation.id} className="rounded-md border border-border bg-background p-2">
+              <li
+                key={annotation.id}
+                className="rounded-md border border-orange-200 bg-orange-100/70 p-2 dark:border-orange-500/40 dark:bg-orange-900/20"
+              >
                 <div className="font-mono text-xs text-muted-foreground">{rangeSummary(annotation)}</div>
                 <div className="mt-1 text-muted-foreground">"{annotation.quote}"</div>
                 <div className="mt-1">{annotation.note}</div>
