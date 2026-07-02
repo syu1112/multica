@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
+
 import { forwardRef, useRef, useState, useImperativeHandle } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import "@testing-library/jest-dom/vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask, Issue, TimelineEntry } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -239,6 +242,7 @@ const mockApiObj = vi.hoisted(() => ({
   getProject: vi.fn(),
   listProjects: vi.fn().mockResolvedValue({ projects: [] }),
   openIssueInIde: vi.fn(),
+  getOpenIdeCommandStatus: vi.fn(),
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -363,6 +367,11 @@ beforeEach(() => {
     writable: true,
     value: scrollIntoViewSpy,
   });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
 });
 
 // Mock modals
@@ -534,6 +543,12 @@ describe("IssueDetail (shared)", () => {
       command_id: "cmd-1",
       status: "queued",
       task_id: "task-1",
+    });
+    mockApiObj.getOpenIdeCommandStatus.mockResolvedValue({
+      command_id: "cmd-1",
+      status: "completed",
+      task_id: "task-1",
+      error: "",
     });
     // Reset project mock — individual tests override per case. Default fixture
     // has project_id: null so getProject is not invoked.
@@ -717,6 +732,53 @@ describe("IssueDetail (shared)", () => {
       expect(mockApiObj.openIssueInIde).toHaveBeenCalledWith("issue-1", "intellij_idea", { taskId: undefined });
     });
     expect(toast.success).toHaveBeenCalledWith("Requested local runtime to open IntelliJ IDEA");
+  });
+
+  it("shows the daemon error when opening IntelliJ IDEA fails after the request is queued", async () => {
+    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, project_id: "project-1" });
+    mockApiObj.getProject.mockResolvedValue({
+      id: "project-1",
+      workspace_id: "ws-1",
+      title: "Project",
+      description: null,
+      icon: null,
+      status: "in_progress",
+      lead_id: null,
+      start_date: null,
+      target_date: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      open_count: 0,
+      in_progress_count: 0,
+      done_count: 0,
+      resource_count: 0,
+    });
+    mockApiObj.openIssueInIde.mockResolvedValue({
+      command_id: "cmd-1",
+      status: "queued",
+      task_id: "task-1",
+    });
+    mockApiObj.getOpenIdeCommandStatus.mockResolvedValueOnce({
+      command_id: "cmd-1",
+      status: "failed",
+      task_id: "task-1",
+      error: "exec: \"idea\": executable file not found in %PATH%",
+    });
+
+    renderIssueDetail();
+
+    const button = await screen.findByRole("button", {
+      name: "Open working directory in IntelliJ IDEA",
+    });
+    await waitFor(() => {
+      expect(button).toBeEnabled();
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(mockApiObj.getOpenIdeCommandStatus).toHaveBeenCalledWith("issue-1", "cmd-1");
+      expect(toast.error).toHaveBeenCalledWith("Failed to open IntelliJ IDEA: exec: \"idea\": executable file not found in %PATH%");
+    }, { timeout: 3_000 });
   });
 
   it("passes the latest task with a work directory when opening IntelliJ IDEA", async () => {

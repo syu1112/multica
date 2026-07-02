@@ -12,6 +12,7 @@ import type {
   ListIssuesParams,
   ListGroupedIssuesParams,
   OpenIdeCommandResponse,
+  OpenIdeCommandStatusResponse,
   Agent,
   CreateAgentRequest,
   AgentTemplate,
@@ -215,7 +216,9 @@ import {
   EMPTY_ACTIVE_TASKS_FOR_ISSUE_RESPONSE,
   EMPTY_TASK_MESSAGE_PAYLOAD_LIST,
   EMPTY_OPEN_IDE_COMMAND_RESPONSE,
+  EMPTY_OPEN_IDE_COMMAND_STATUS_RESPONSE,
   OpenIdeCommandResponseSchema,
+  OpenIdeCommandStatusResponseSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1489,6 +1492,19 @@ export class ApiClient {
       OpenIdeCommandResponseSchema,
       EMPTY_OPEN_IDE_COMMAND_RESPONSE,
       { endpoint: "POST /api/issues/:id/ide/open" },
+    );
+  }
+
+  async getOpenIdeCommandStatus(
+    issueId: string,
+    commandId: string,
+  ): Promise<OpenIdeCommandStatusResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/ide/commands/${commandId}`);
+    return parseWithFallback(
+      raw,
+      OpenIdeCommandStatusResponseSchema,
+      EMPTY_OPEN_IDE_COMMAND_STATUS_RESPONSE,
+      { endpoint: "GET /api/issues/:id/ide/commands/:commandId" },
     );
   }
 

@@ -679,6 +679,27 @@ export function pickOpenIdeTaskId(tasks: AgentTask[] | undefined): string | unde
   return latest?.id;
 }
 
+const OPEN_IDE_STATUS_POLL_INTERVAL_MS = 1_000;
+const OPEN_IDE_STATUS_POLL_ATTEMPTS = 10;
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function pollOpenIdeCommandStatus(issueId: string, commandId: string) {
+  if (!commandId) return;
+  for (let attempt = 0; attempt < OPEN_IDE_STATUS_POLL_ATTEMPTS; attempt++) {
+    await wait(OPEN_IDE_STATUS_POLL_INTERVAL_MS);
+    const status = await api.getOpenIdeCommandStatus(issueId, commandId);
+    if (status.status === "completed") {
+      return;
+    }
+    if (status.status === "failed" || status.status === "expired") {
+      throw new Error(status.error?.trim() || status.status);
+    }
+  }
+}
+
 function OpenIssueInIntelliJButton({
   issueId,
   childIssueIds = [],
@@ -712,8 +733,13 @@ function OpenIssueInIntelliJButton({
     if (pending || tasksLoading || childTasksLoading) return;
     setPending(true);
     try {
-      await api.openIssueInIde(issueId, "intellij_idea", { taskId });
+      const command = await api.openIssueInIde(issueId, "intellij_idea", { taskId });
       toast.success(t(($) => $.detail.open_intellij_requested));
+      void pollOpenIdeCommandStatus(issueId, command.command_id).catch((error) => {
+        const detail = error instanceof Error ? error.message.trim() : "";
+        const base = t(($) => $.detail.open_intellij_failed);
+        toast.error(detail ? `${base}: ${detail}` : base);
+      });
     } catch (error) {
       const code = apiErrorCode(error);
       if (error instanceof ApiError && error.status === 403) {

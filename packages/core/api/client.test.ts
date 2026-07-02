@@ -695,6 +695,35 @@ describe("ApiClient", () => {
     });
   });
 
+  describe("getOpenIdeCommandStatus", () => {
+    it("uses the issue-level IDE command endpoint and parses daemon errors", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({
+          command_id: "cmd-1",
+          status: "failed",
+          task_id: "task-1",
+          error: "exec: \"idea\": executable file not found in %PATH%",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const result = await client.getOpenIdeCommandStatus("issue-1", "cmd-1");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.example.test/api/issues/issue-1/ide/commands/cmd-1");
+      expect(result).toEqual({
+        command_id: "cmd-1",
+        status: "failed",
+        task_id: "task-1",
+        error: "exec: \"idea\": executable file not found in %PATH%",
+      });
+    });
+  });
+
   describe("chat attachment wiring", () => {
     it("uploadFile includes chat_session_id in the FormData body", async () => {
       const fetchMock = vi.fn().mockResolvedValue(

@@ -136,6 +136,13 @@ export interface OpenIdeCommandResponse {
   task_id: string;
 }
 
+export interface OpenIdeCommandStatusResponse {
+  command_id: string;
+  status: "queued" | "claimed" | "completed" | "failed" | "expired";
+  task_id: string;
+  error?: string;
+}
+
 /** Per-status bucket in the paginated issue cache. `total` is the server count (all pages), not the length of `issues`. */
 export interface IssueStatusBucket {
   issues: Issue[];
