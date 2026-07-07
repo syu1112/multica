@@ -208,9 +208,9 @@ type Daemon struct {
 	localPathLocks *LocalPathLocker
 
 	// issueWorktreeLocks serialises git-repo tasks that share the same
-	// issue-stable workdir on this daemon. Fixed issue workdirs are reused
+	// issue-tree workdir on this daemon. Fixed worktree issue dirs are reused
 	// across agents and runtimes on the same machine, so concurrent tasks for
-	// one issue must not write the same checkout at the same time.
+	// one issue tree must not write the same checkout at the same time.
 	issueWorktreeLocks *LocalPathLocker
 
 	// bgSyncs tracks background goroutines started by registerTaskRepos so
@@ -2981,7 +2981,7 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 
 func (d *Daemon) acquireIssueWorktreeLockIfNeeded(ctx context.Context, task Task, localAssignment *localDirectoryAssignment, taskLog *slog.Logger) (release func(), abort bool) {
 	workDirIdentity := workDirIdentityForTask(task, localAssignment)
-	if task.IssueID == "" || workDirIdentity != task.IssueID {
+	if task.IssueID == "" || localAssignment != nil || !taskUsesGitRepoWorktree(task) {
 		return nil, false
 	}
 	envRoot := execenv.PredictRootDir(d.cfg.WorkspacesRoot, task.WorkspaceID, workDirIdentity)
@@ -3098,6 +3098,11 @@ func gcMetaForTask(task Task) (execenv.GCMeta, bool) {
 	case task.IssueID != "":
 		meta.Kind = execenv.GCKindIssue
 		meta.IssueID = task.IssueID
+		if task.WorktreeIssueID != "" && taskUsesGitRepoWorktree(task) {
+			if localAssignment, _ := findLocalDirectoryAssignment(task.ProjectResources); localAssignment == nil {
+				meta.IssueID = task.WorktreeIssueID
+			}
+		}
 	case task.QuickCreatePrompt != "":
 		// Quick-create tasks reach WriteGCMeta before the server runs
 		// LinkTaskToIssue, so IssueID is always empty here. Persist the
@@ -3236,8 +3241,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	workDirIdentity := workDirIdentityForTask(task, localAssignment)
 	// Mark candidate env roots as active before any env work so the GC loop
 	// can't reclaim artifacts inside them mid-execution. Git repo issue tasks
-	// use the issue ID as the directory identity so the worktree stays stable
-	// across task IDs, agents, and runtimes on this machine.
+	// use the worktree issue ID as the directory identity so the worktree stays stable
+	// across task IDs, agents, runtimes, and child issues on this machine.
 	predictedRoot := execenv.PredictRootDir(d.cfg.WorkspacesRoot, task.WorkspaceID, workDirIdentity)
 	d.markActiveEnvRoot(predictedRoot)
 	defer d.unmarkActiveEnvRoot(predictedRoot)
@@ -3275,7 +3280,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 
 	fixedIssueWorkDir := ""
-	if task.IssueID != "" && workDirIdentity == task.IssueID && localAssignment == nil {
+	if task.IssueID != "" && localAssignment == nil && taskUsesGitRepoWorktree(task) {
 		fixedIssueWorkDir = filepath.Join(predictedRoot, "workdir")
 	}
 	if fixedIssueWorkDir != "" {

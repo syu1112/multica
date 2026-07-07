@@ -1428,14 +1428,23 @@ func (q *Queries) GetAgentTaskInWorkspace(ctx context.Context, arg GetAgentTaskI
 }
 
 const getLastGithubRepoIssueWorkDir = `-- name: GetLastGithubRepoIssueWorkDir :one
+WITH RECURSIVE issue_tree AS (
+    SELECT i.id, i.workspace_id, i.project_id
+    FROM issue i
+    WHERE i.id = $2
+      AND i.workspace_id = $3
+    UNION ALL
+    SELECT child.id, child.workspace_id, child.project_id
+    FROM issue child
+    JOIN issue_tree parent ON child.parent_issue_id = parent.id
+    WHERE child.workspace_id = $3
+)
 SELECT atq.work_dir, atq.runtime_id
-FROM issue i
+FROM issue_tree i
 JOIN agent_task_queue atq
   ON atq.issue_id = i.id
  AND atq.runtime_id = $1
-WHERE i.id = $2
-  AND i.workspace_id = $3
-  AND i.project_id IS NOT NULL
+WHERE i.project_id IS NOT NULL
   AND EXISTS (
     SELECT 1
     FROM project_resource pr
@@ -1458,9 +1467,9 @@ LIMIT 1
 `
 
 type GetLastGithubRepoIssueWorkDirParams struct {
-	RuntimeID   pgtype.UUID `json:"runtime_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RuntimeID       pgtype.UUID `json:"runtime_id"`
+	WorktreeIssueID pgtype.UUID `json:"worktree_issue_id"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
 }
 
 type GetLastGithubRepoIssueWorkDirRow struct {
@@ -1468,11 +1477,12 @@ type GetLastGithubRepoIssueWorkDirRow struct {
 	RuntimeID pgtype.UUID `json:"runtime_id"`
 }
 
-// Returns the most recent reusable work_dir for an issue on the claiming
-// runtime, regardless of which agent produced it. This is a worktree reuse
-// hint only: callers must not inherit session_id across agents.
+// Returns the most recent reusable work_dir for an issue-tree worktree on the
+// claiming runtime, regardless of which agent or child issue produced it. This
+// is a worktree reuse hint only: callers must not inherit session_id across
+// agents or issues.
 func (q *Queries) GetLastGithubRepoIssueWorkDir(ctx context.Context, arg GetLastGithubRepoIssueWorkDirParams) (GetLastGithubRepoIssueWorkDirRow, error) {
-	row := q.db.QueryRow(ctx, getLastGithubRepoIssueWorkDir, arg.RuntimeID, arg.IssueID, arg.WorkspaceID)
+	row := q.db.QueryRow(ctx, getLastGithubRepoIssueWorkDir, arg.RuntimeID, arg.WorktreeIssueID, arg.WorkspaceID)
 	var i GetLastGithubRepoIssueWorkDirRow
 	err := row.Scan(&i.WorkDir, &i.RuntimeID)
 	return i, err

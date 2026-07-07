@@ -1233,6 +1233,26 @@ func (h *Handler) filterProjectResourcesForRuntime(ctx context.Context, projectI
 	return rows
 }
 
+func (h *Handler) worktreeIssueIDForIssue(ctx context.Context, issue db.Issue) pgtype.UUID {
+	root := issue.ID
+	cursor := issue
+	seen := map[string]struct{}{uuidToString(issue.ID): {}}
+	for depth := 0; depth < 64 && cursor.ParentIssueID.Valid; depth++ {
+		parent, err := h.Queries.GetIssue(ctx, cursor.ParentIssueID)
+		if err != nil || parent.WorkspaceID != issue.WorkspaceID {
+			return root
+		}
+		parentID := uuidToString(parent.ID)
+		if _, ok := seen[parentID]; ok {
+			return root
+		}
+		seen[parentID] = struct{}{}
+		root = parent.ID
+		cursor = parent
+	}
+	return root
+}
+
 // ClaimTaskByRuntime atomically claims the next queued task for a runtime.
 // The response includes the agent's name and skills, fetched fresh from the DB.
 func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
@@ -1374,10 +1394,13 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// for issues inside that project. When the project has no github_repo
 	// resources (or no project at all), we fall back to the workspace repos.
 	var issueWorkspaceID pgtype.UUID
+	var issueWorktreeID pgtype.UUID
 	if task.IssueID.Valid {
 		if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
 			issueWorkspaceID = issue.WorkspaceID
+			issueWorktreeID = h.worktreeIssueIDForIssue(r.Context(), issue)
 			resp.WorkspaceID = uuidToString(issue.WorkspaceID)
+			resp.WorktreeIssueID = uuidToString(issueWorktreeID)
 			resp.ThreadName = issue.Title
 
 			// Squad-leader briefing injection: when the issue is assigned
@@ -1552,9 +1575,9 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			}
 			if resp.PriorWorkDir == "" && issueWorkspaceID.Valid {
 				if issuePrior, err := h.Queries.GetLastGithubRepoIssueWorkDir(r.Context(), db.GetLastGithubRepoIssueWorkDirParams{
-					IssueID:     task.IssueID,
-					WorkspaceID: issueWorkspaceID,
-					RuntimeID:   task.RuntimeID,
+					RuntimeID:       task.RuntimeID,
+					WorktreeIssueID: issueWorktreeID,
+					WorkspaceID:     issueWorkspaceID,
 				}); err == nil && issuePrior.WorkDir.Valid {
 					resp.PriorWorkDir = issuePrior.WorkDir.String
 				}

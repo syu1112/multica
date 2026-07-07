@@ -3138,6 +3138,7 @@ func TestCompleteTask_AssignmentTriggered_DoesNotSuppressTrivialDoneOutput(t *te
 type claimRuntimeGuardTask struct {
 	PriorSessionID           string   `json:"prior_session_id"`
 	PriorWorkDir             string   `json:"prior_work_dir"`
+	WorktreeIssueID          string   `json:"worktree_issue_id"`
 	ChatMessage              string   `json:"chat_message"`
 	ThreadName               string   `json:"thread_name"`
 	QuickCreateAttachmentIDs []string `json:"quick_create_attachment_ids"`
@@ -3620,6 +3621,109 @@ func TestClaimTask_GithubRepoIssueWorkDirSharedAcrossAgents(t *testing.T) {
 	}
 	if task.PriorWorkDir != "/tmp/shared-github-workdir" {
 		t.Fatalf("different agent should inherit issue github_repo workdir, got %q", task.PriorWorkDir)
+	}
+}
+
+func TestClaimTask_GithubRepoChildIssueUsesParentWorktree(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
+
+	var secondAgentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks
+		)
+		VALUES ($1, $2, 'local', '{}'::jsonb, $3, 'workspace', 3)
+		RETURNING id
+	`, testWorkspaceID, "Child Worktree Agent "+t.Name(), runtimeID).Scan(&secondAgentID); err != nil {
+		t.Fatalf("setup: create second runtime guard agent: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, secondAgentID) })
+
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title)
+		VALUES ($1, 'parent child shared worktree fixture')
+		RETURNING id
+	`, testWorkspaceID).Scan(&projectID); err != nil {
+		t.Fatalf("setup: create project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectID) })
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO project_resource (
+			project_id, workspace_id, resource_type, resource_ref, position
+		) VALUES ($1, $2, 'github_repo', '{"url":"https://github.com/acme/repo"}'::jsonb, 0)
+	`, projectID, testWorkspaceID); err != nil {
+		t.Fatalf("setup: create github_repo project_resource: %v", err)
+	}
+
+	var parentIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, project_id, title, status, priority,
+			creator_id, creator_type, number, position
+		)
+		VALUES ($1, $2, 'parent shared worktree', 'in_progress', 'none',
+		        $3, 'member', 81611, 0)
+		RETURNING id
+	`, testWorkspaceID, projectID, testUserID).Scan(&parentIssueID); err != nil {
+		t.Fatalf("setup: create parent issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, parentIssueID) })
+
+	var childIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, project_id, parent_issue_id, title, status, priority,
+			creator_id, creator_type, number, position
+		)
+		VALUES ($1, $2, $3, 'child shared worktree', 'in_progress', 'none',
+		        $4, 'member', 81612, 0)
+		RETURNING id
+	`, testWorkspaceID, projectID, parentIssueID, testUserID).Scan(&childIssueID); err != nil {
+		t.Fatalf("setup: create child issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, childIssueID) })
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, issue_id,
+			status, priority, started_at, completed_at,
+			session_id, work_dir
+		)
+		VALUES ($1, $2, $3, 'completed', 0, now(), now(),
+		        'parent-agent-session', '/tmp/parent-github-workdir')
+	`, agentID, runtimeID, parentIssueID); err != nil {
+		t.Fatalf("setup: create parent prior task: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, issue_id,
+			status, priority
+		)
+		VALUES ($1, $2, $3, 'queued', 0)
+	`, secondAgentID, runtimeID, childIssueID); err != nil {
+		t.Fatalf("setup: create child queued task: %v", err)
+	}
+
+	task := claimTaskForRuntimeGuard(t, runtimeID, daemonID)
+	if task.ThreadName != "child shared worktree" {
+		t.Fatalf("claimed task thread_name = %q, want child issue title", task.ThreadName)
+	}
+	if task.WorktreeIssueID != parentIssueID {
+		t.Fatalf("worktree_issue_id = %q, want parent issue ID %q", task.WorktreeIssueID, parentIssueID)
+	}
+	if task.PriorSessionID != "" {
+		t.Fatalf("child issue must not inherit parent session, got %q", task.PriorSessionID)
+	}
+	if task.PriorWorkDir != "/tmp/parent-github-workdir" {
+		t.Fatalf("child issue should inherit parent github_repo workdir, got %q", task.PriorWorkDir)
 	}
 }
 

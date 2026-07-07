@@ -4,6 +4,9 @@ const githubRepoResourceType = "github_repo"
 
 func workDirIdentityForTask(task Task, localAssignment *localDirectoryAssignment) string {
 	if task.IssueID != "" && localAssignment == nil && taskUsesGitRepoWorktree(task) {
+		if task.WorktreeIssueID != "" {
+			return task.WorktreeIssueID
+		}
 		return task.IssueID
 	}
 	return task.ID

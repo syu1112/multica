@@ -414,17 +414,27 @@ ORDER BY COALESCE(completed_at, started_at, dispatched_at, created_at) DESC
 LIMIT 1;
 
 -- name: GetLastGithubRepoIssueWorkDir :one
--- Returns the most recent reusable work_dir for an issue on the claiming
--- runtime, regardless of which agent produced it. This is a worktree reuse
--- hint only: callers must not inherit session_id across agents.
+-- Returns the most recent reusable work_dir for an issue-tree worktree on the
+-- claiming runtime, regardless of which agent or child issue produced it. This
+-- is a worktree reuse hint only: callers must not inherit session_id across
+-- agents or issues.
+WITH RECURSIVE issue_tree AS (
+    SELECT i.id, i.workspace_id, i.project_id
+    FROM issue i
+    WHERE i.id = sqlc.arg('worktree_issue_id')
+      AND i.workspace_id = sqlc.arg('workspace_id')
+    UNION ALL
+    SELECT child.id, child.workspace_id, child.project_id
+    FROM issue child
+    JOIN issue_tree parent ON child.parent_issue_id = parent.id
+    WHERE child.workspace_id = sqlc.arg('workspace_id')
+)
 SELECT atq.work_dir, atq.runtime_id
-FROM issue i
+FROM issue_tree i
 JOIN agent_task_queue atq
   ON atq.issue_id = i.id
  AND atq.runtime_id = sqlc.arg('runtime_id')
-WHERE i.id = sqlc.arg('issue_id')
-  AND i.workspace_id = sqlc.arg('workspace_id')
-  AND i.project_id IS NOT NULL
+WHERE i.project_id IS NOT NULL
   AND EXISTS (
     SELECT 1
     FROM project_resource pr

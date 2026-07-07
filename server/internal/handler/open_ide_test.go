@@ -321,6 +321,66 @@ func TestOpenIssueInIde_AppendsGithubRepoCheckoutDirectory(t *testing.T) {
 	}
 }
 
+func TestOpenIssueInIde_ChildIssueUsesParentGithubWorktreeTask(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID, agentID, parentIssueID := createOpenIdeFixture(t, testUserID)
+	projectID := attachOpenIdeGithubProject(t, parentIssueID, "https://github.com/syu1112/multica.git")
+	parentTaskID := seedOpenIdeTask(t, agentID, runtimeID, parentIssueID, "completed", `C:\Users\imshe\multica_workspaces\parent\workdir`, "-1 minute")
+
+	var childIssueID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO issue (
+			workspace_id, project_id, parent_issue_id, title, status,
+			priority, creator_id, creator_type, number, position
+		)
+		VALUES (
+			$1, $2, $3, 'Open IDE child issue', 'in_progress',
+			'none', $4, 'member',
+			(SELECT COALESCE(MAX(number), 83000) + 1 FROM issue WHERE workspace_id = $1),
+			0
+		)
+		RETURNING id
+	`, testWorkspaceID, projectID, parentIssueID, testUserID).Scan(&childIssueID); err != nil {
+		t.Fatalf("create child issue: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, childIssueID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/issues/"+childIssueID+"/ide/open", map[string]any{"ide": "intellij_idea"})
+	req = withURLParam(req, "id", childIssueID)
+	testHandler.OpenIssueInIde(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("OpenIssueInIde: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.TaskID != parentTaskID {
+		t.Fatalf("task_id = %s, want parent issue task %s", resp.TaskID, parentTaskID)
+	}
+
+	var payload string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT payload::text
+		FROM daemon_command
+		WHERE task_id = $1
+	`, parentTaskID).Scan(&payload); err != nil {
+		t.Fatalf("load daemon command: %v", err)
+	}
+	if !strings.Contains(payload, `parent\\workdir\\multica`) {
+		t.Fatalf("payload did not target parent repo checkout directory: %s", payload)
+	}
+}
+
 func TestOpenIssueInIde_RejectsWorkspaceAdminForOtherRuntime(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

@@ -78,6 +78,24 @@ func TestWorkDirIdentityForTask_GithubRepoIssueUsesIssueID(t *testing.T) {
 	}
 }
 
+func TestWorkDirIdentityForTask_GithubRepoChildIssueUsesWorktreeIssueID(t *testing.T) {
+	t.Parallel()
+
+	parentIssueID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	childIssueID := "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	task := Task{
+		ID:              "11111111-2222-3333-4444-555555555555",
+		IssueID:         childIssueID,
+		WorktreeIssueID: parentIssueID,
+		Repos: []RepoData{
+			{URL: "https://github.com/acme/repo.git"},
+		},
+	}
+	if got := workDirIdentityForTask(task, nil); got != parentIssueID {
+		t.Fatalf("child github repo issue workdir identity = %q, want parent issue ID %q", got, parentIssueID)
+	}
+}
+
 func TestWorkDirIdentityForTask_ProjectGithubRepoUsesIssueID(t *testing.T) {
 	t.Parallel()
 

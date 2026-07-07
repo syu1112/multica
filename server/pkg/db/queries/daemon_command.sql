@@ -1,4 +1,32 @@
 -- name: GetLatestOpenIdeTaskForIssue :one
+WITH RECURSIVE ancestors AS (
+    SELECT i.id, i.parent_issue_id, i.workspace_id
+    FROM issue i
+    WHERE i.id = @issue_id
+      AND i.workspace_id = @workspace_id
+    UNION ALL
+    SELECT parent.id, parent.parent_issue_id, parent.workspace_id
+    FROM issue parent
+    JOIN ancestors child ON child.parent_issue_id = parent.id
+    WHERE parent.workspace_id = @workspace_id
+),
+root_issue AS (
+    SELECT id
+    FROM ancestors
+    WHERE parent_issue_id IS NULL
+    LIMIT 1
+),
+issue_tree AS (
+    SELECT i.id
+    FROM issue i
+    JOIN root_issue root ON root.id = i.id
+    WHERE i.workspace_id = @workspace_id
+    UNION ALL
+    SELECT child.id
+    FROM issue child
+    JOIN issue_tree parent ON child.parent_issue_id = parent.id
+    WHERE child.workspace_id = @workspace_id
+)
 SELECT
     atq.id AS task_id,
     atq.issue_id,
@@ -16,7 +44,20 @@ FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 JOIN agent_runtime ar ON ar.id = atq.runtime_id
 JOIN issue i ON i.id = atq.issue_id
-WHERE atq.issue_id = @issue_id
+WHERE (
+    atq.issue_id = @issue_id
+    OR (
+        atq.issue_id IN (SELECT id FROM issue_tree)
+        AND i.project_id IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+            FROM project_resource pr
+            WHERE pr.project_id = i.project_id
+              AND pr.workspace_id = i.workspace_id
+              AND pr.resource_type = 'github_repo'
+        )
+    )
+)
   AND i.workspace_id = @workspace_id
   AND ar.workspace_id = @workspace_id
   AND ar.runtime_mode = 'local'

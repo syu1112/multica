@@ -1289,6 +1289,18 @@ func TestGCMetaForTask(t *testing.T) {
 			idOK: func(m execenv.GCMeta) bool { return m.IssueID == "i1" },
 		},
 		{
+			name: "github repo child issue task uses worktree issue",
+			task: Task{
+				ID:              "t3-child",
+				WorkspaceID:     "ws",
+				IssueID:         "child-issue",
+				WorktreeIssueID: "parent-issue",
+				Repos:           []RepoData{{URL: "https://github.com/acme/repo.git"}},
+			},
+			want: execenv.GCKindIssue,
+			idOK: func(m execenv.GCMeta) bool { return m.IssueID == "parent-issue" },
+		},
+		{
 			name: "quick-create task — issue_id always empty at WriteGCMeta time",
 			task: Task{ID: "t4", WorkspaceID: "ws", QuickCreatePrompt: "do the thing"},
 			want: execenv.GCKindQuickCreate,
