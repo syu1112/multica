@@ -4,6 +4,8 @@ export type AgentRuntimeMode = "local" | "cloud";
 
 export type AgentVisibility = "workspace" | "private";
 
+export type AgentExecutionMode = "normal" | "goal";
+
 // Runtime visibility is retained for compatibility, but local runtime
 // invocation and selection are owner-only. "public" must not be treated as
 // permission for another member, including workspace owner/admin, to call the
@@ -300,6 +302,13 @@ export interface Agent {
   max_concurrent_tasks: number;
   model: string;
   /**
+   * Execution contract for task runs. `normal` preserves the historical
+   * single-turn provider behavior; `goal` asks supported runtimes to work
+   * until the task objective is completed or explicitly blocked.
+   * Older backends omit this field; treat undefined as `normal`.
+   */
+  execution_mode?: AgentExecutionMode;
+  /**
    * Runtime-native reasoning/effort token (e.g. Claude's
    * `low|medium|high|xhigh|max`, Codex's
    * `none|minimal|low|medium|high|xhigh`). Empty string means "no
@@ -346,6 +355,7 @@ export interface CreateAgentRequest {
   visibility?: AgentVisibility;
   max_concurrent_tasks?: number;
   model?: string;
+  execution_mode?: AgentExecutionMode;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
   thinking_level?: string;
   /** Optional template slug used by the onboarding agent picker. Surfaced
@@ -459,6 +469,7 @@ export interface UpdateAgentRequest {
   status?: AgentStatus;
   max_concurrent_tasks?: number;
   model?: string;
+  execution_mode?: AgentExecutionMode;
   /**
    * Runtime-native reasoning/effort token. Tri-state semantics (MUL-2339):
    *   - field omitted → no change

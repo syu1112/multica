@@ -480,7 +480,7 @@ func TestBuildClaudeArgsFiltersBlockedCustomArgs(t *testing.T) {
 func TestBuildClaudeInputEncodesUserMessage(t *testing.T) {
 	t.Parallel()
 
-	data, err := buildClaudeInput("say pong")
+	data, err := buildClaudeInput("say pong", ExecOptions{})
 	if err != nil {
 		t.Fatalf("buildClaudeInput: %v", err)
 	}
@@ -515,6 +515,69 @@ func TestBuildClaudeInputEncodesUserMessage(t *testing.T) {
 	if block["type"] != "text" || block["text"] != "say pong" {
 		t.Fatalf("unexpected content block: %v", block)
 	}
+}
+
+func TestBuildClaudeInputGoalModeInjectsGoalContract(t *testing.T) {
+	t.Parallel()
+
+	data, err := buildClaudeInput("Fix the flaky tests", ExecOptions{ExecutionMode: "goal"})
+	if err != nil {
+		t.Fatalf("buildClaudeInput: %v", err)
+	}
+
+	text := extractClaudeInputText(t, data)
+	for _, want := range []string{
+		"# Execution mode: Goal",
+		"Work until this goal is genuinely handled:",
+		"Fix the flaky tests",
+		"If the goal is complete, say so in the final answer.",
+		"If blocked, explain the blocking condition and what is needed next.",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("goal prompt missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestBuildClaudeInputGoalModePreservesPromptBody(t *testing.T) {
+	t.Parallel()
+
+	prompt := "  Fix the flaky tests\n\nKeep existing assertions.  "
+	data, err := buildClaudeInput(prompt, ExecOptions{ExecutionMode: "goal"})
+	if err != nil {
+		t.Fatalf("buildClaudeInput: %v", err)
+	}
+
+	text := extractClaudeInputText(t, data)
+	if !strings.Contains(text, "handled:\n"+prompt+"\n\nIf the goal is complete") {
+		t.Fatalf("goal prompt did not preserve original prompt body:\n%s", text)
+	}
+}
+
+func extractClaudeInputText(t *testing.T, data []byte) string {
+	t.Helper()
+
+	var payload map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(data), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	message, ok := payload["message"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected message object, got %T", payload["message"])
+	}
+	content, ok := message["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("expected one content block, got %v", message["content"])
+	}
+	block, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected content block object, got %T", content[0])
+	}
+	text, ok := block["text"].(string)
+	if !ok {
+		t.Fatalf("expected text string, got %T", block["text"])
+	}
+	return text
 }
 
 func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {

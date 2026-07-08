@@ -31,6 +31,11 @@ import (
 // char_length and the front-end's String.prototype.length-with-counter UX.
 const maxAgentDescriptionLength = 255
 
+const (
+	agentExecutionModeNormal = "normal"
+	agentExecutionModeGoal   = "goal"
+)
+
 type AgentResponse struct {
 	ID               string          `json:"id"`
 	WorkspaceID      string          `json:"workspace_id"`
@@ -59,6 +64,7 @@ type AgentResponse struct {
 	Status             string `json:"status"`
 	MaxConcurrentTasks int32  `json:"max_concurrent_tasks"`
 	Model              string `json:"model"`
+	ExecutionMode      string `json:"execution_mode"`
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
 	// for this agent (empty = use runtime default). The picker is per-runtime
 	// per-model; the API never normalizes across providers. See MUL-2339.
@@ -139,6 +145,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Status:             a.Status,
 		MaxConcurrentTasks: a.MaxConcurrentTasks,
 		Model:              a.Model.String,
+		ExecutionMode:      a.ExecutionMode,
 		ThinkingLevel:      a.ThinkingLevel.String,
 		OwnerID:            uuidToPtr(a.OwnerID),
 		Skills:             []AgentSkillSummary{},
@@ -147,6 +154,10 @@ func agentToResponse(a db.Agent) AgentResponse {
 		ArchivedAt:         timestampToPtr(a.ArchivedAt),
 		ArchivedBy:         uuidToPtr(a.ArchivedBy),
 	}
+}
+
+func isValidAgentExecutionMode(value string) bool {
+	return value == agentExecutionModeNormal || value == agentExecutionModeGoal
 }
 
 // maskGatewayToken replaces runtime_config.gateway.token with the public
@@ -356,6 +367,7 @@ type TaskAgentData struct {
 	CustomArgs    []string                 `json:"custom_args,omitempty"`
 	McpConfig     json.RawMessage          `json:"mcp_config,omitempty"`
 	Model         string                   `json:"model,omitempty"`
+	ExecutionMode string                   `json:"execution_mode,omitempty"`
 	ThinkingLevel string                   `json:"thinking_level,omitempty"`
 	// RuntimeConfig is the agent's saved runtime_config JSON as-is. The
 	// daemon decodes it per-provider — e.g. the openclaw backend reads
@@ -761,6 +773,7 @@ type CreateAgentRequest struct {
 	Visibility         string            `json:"visibility"`
 	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
 	Model              string            `json:"model"`
+	ExecutionMode      string            `json:"execution_mode"`
 	ThinkingLevel      string            `json:"thinking_level"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
@@ -819,6 +832,13 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MaxConcurrentTasks == 0 {
 		req.MaxConcurrentTasks = 6
+	}
+	if req.ExecutionMode == "" {
+		req.ExecutionMode = agentExecutionModeNormal
+	}
+	if !isValidAgentExecutionMode(req.ExecutionMode) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("execution_mode %q is not valid", req.ExecutionMode))
+		return
 	}
 
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
@@ -936,6 +956,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		McpConfig:          mc,
 		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
 		ThinkingLevel:      pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
+		ExecutionMode:      req.ExecutionMode,
 	})
 	if err != nil {
 		// Unique constraint on (workspace_id, name) — return a clear conflict error
@@ -993,6 +1014,7 @@ type UpdateAgentRequest struct {
 	Status             *string          `json:"status"`
 	MaxConcurrentTasks *int32           `json:"max_concurrent_tasks"`
 	Model              *string          `json:"model"`
+	ExecutionMode      *string          `json:"execution_mode"`
 	// ThinkingLevel is treated as a tri-state per-MUL-2339:
 	//   - field omitted → no change (leave existing value alone)
 	//   - field present with "" → explicit clear (use runtime default)
@@ -1243,6 +1265,13 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MaxConcurrentTasks != nil {
 		params.MaxConcurrentTasks = pgtype.Int4{Int32: *req.MaxConcurrentTasks, Valid: true}
+	}
+	if req.ExecutionMode != nil {
+		if !isValidAgentExecutionMode(*req.ExecutionMode) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("execution_mode %q is not valid", *req.ExecutionMode))
+			return
+		}
+		params.ExecutionMode = pgtype.Text{String: *req.ExecutionMode, Valid: true}
 	}
 	runtimeCapabilityChanged := req.RuntimeID != nil || req.RuntimeProvider != nil || req.RuntimeProfileID != nil
 	if req.Model != nil {

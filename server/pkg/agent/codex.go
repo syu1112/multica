@@ -703,6 +703,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		} else {
 			b.cfg.Logger.Info("codex thread started", "thread_id", threadID)
 		}
+		c.trySetThreadGoal(runCtx, threadID, prompt, opts, b.cfg.Logger)
 
 		// 3. Send turn and wait for completion
 		turnParams := map[string]any{
@@ -996,6 +997,30 @@ func (c *codexClient) trySetThreadName(ctx context.Context, threadID, name strin
 		logger.Warn("codex thread/name/set failed; continuing without provider-native thread title",
 			"thread_id", threadID, "error", err)
 	}
+}
+
+func (c *codexClient) trySetThreadGoal(ctx context.Context, threadID, objective string, opts ExecOptions, logger *slog.Logger) {
+	if strings.TrimSpace(opts.ExecutionMode) != "goal" {
+		return
+	}
+	objective = strings.TrimSpace(objective)
+	if objective == "" {
+		return
+	}
+	if err := c.setThreadGoal(ctx, threadID, objective); err != nil {
+		logger.Warn("codex thread/goal/set failed; continuing in normal execution mode",
+			"thread_id", threadID, "error", err)
+	}
+}
+
+func (c *codexClient) setThreadGoal(ctx context.Context, threadID, objective string) error {
+	_, err := c.request(ctx, "thread/goal/set", map[string]any{
+		"threadId":    threadID,
+		"objective":   objective,
+		"status":      "active",
+		"tokenBudget": nil,
+	})
+	return err
 }
 
 func (c *codexClient) setThreadName(ctx context.Context, threadID, name string) error {

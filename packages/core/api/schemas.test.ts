@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   AppConfigSchema,
+  AgentSchema,
   DashboardAgentRunTimeListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   DuplicateIssueErrorBodySchema,
+  EMPTY_AGENT,
   EMPTY_USER,
   ListIssuesResponseSchema,
   RuntimeHourlyActivityListSchema,
@@ -229,6 +231,53 @@ describe("SquadListSchema member preview drift", () => {
     expect(parsed[0]?.member_count).toBe(2);
     expect(parsed[0]?.member_preview).toHaveLength(2);
     expect(parsed[0]?.member_preview?.[0]?.role).toBe("leader");
+  });
+});
+
+describe("AgentSchema execution_mode drift", () => {
+  const baseAgent = {
+    id: "agent-1",
+    workspace_id: "ws-1",
+    runtime_id: null,
+    runtime_provider: "codex",
+    runtime_profile_id: null,
+    name: "Coding agent",
+    description: "",
+    instructions: "",
+    avatar_url: null,
+    runtime_mode: "local",
+    runtime_config: {},
+    custom_args: [],
+    visibility: "private",
+    status: "idle",
+    max_concurrent_tasks: 1,
+    model: "",
+    owner_id: null,
+    skills: [],
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    archived_at: null,
+    archived_by: null,
+  };
+
+  it("defaults missing execution_mode to normal", () => {
+    expect(AgentSchema.parse(baseAgent).execution_mode).toBe("normal");
+  });
+
+  it("preserves goal execution_mode", () => {
+    expect(AgentSchema.parse({ ...baseAgent, execution_mode: "goal" }).execution_mode).toBe(
+      "goal",
+    );
+  });
+
+  it("falls back to normal for malformed execution_mode", () => {
+    const parsed = parseWithFallback(
+      { ...baseAgent, execution_mode: "autonomous" },
+      AgentSchema,
+      EMPTY_AGENT,
+      { endpoint: "GET /api/agents/:id" },
+    );
+    expect(parsed.execution_mode).toBe("normal");
   });
 });
 

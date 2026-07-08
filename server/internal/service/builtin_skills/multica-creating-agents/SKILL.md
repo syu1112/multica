@@ -25,6 +25,7 @@ multica agent env get <agent-id> --output json  # plaintext env (owner/admin onl
 
 `agent get` returns the persisted agent capability fields including
 `runtime_provider`, `runtime_profile_id`, `model`, `thinking_level`,
+`execution_mode`,
 `custom_args`, `has_custom_env`, `custom_env_key_count`, and `skills`. The
 legacy `runtime_id` field remains on the wire for compatibility but is `null`
 in user-facing responses; concrete runtime IDs are private execution resources,
@@ -67,7 +68,8 @@ flags fall through to server defaults rather than sending empty strings.
 The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
 `instructions`, `runtime_provider`, optional `runtime_profile_id`, legacy
 `runtime_id`, `runtime_config`, `custom_env`, `custom_args`, `model`,
-`thinking_level`, `visibility`, `max_concurrent_tasks`, `mcp_config`.
+`thinking_level`, `execution_mode`, `visibility`, `max_concurrent_tasks`,
+`mcp_config`.
 
 ## Field contracts
 
@@ -81,6 +83,7 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
 | `runtime_id` | `agent.runtime_id` (nullable) | legacy compatibility only; must be owned by caller if supplied | converted to provider/profile; not persisted as a new binding; new agents return `null` |
 | `model` | `agent.model` (nullable) | none beyond runtime support | daemon reads; empty = runtime default |
 | `thinking_level` | `agent.thinking_level` (nullable) | provider-level enum; unknown literal → 400 | daemon; empty = runtime default |
+| `execution_mode` | `agent.execution_mode` | optional; must be `normal` or `goal`; defaults to `normal` | daemon; `normal` preserves historical provider behavior, `goal` enables provider goal handling where implemented |
 | `custom_args` | `agent.custom_args` (JSON array) | JSON shape checked CLI-side; server stores as-is | daemon (extra CLI switches); defaults to `[]` |
 | `runtime_config` | `agent.runtime_config` (JSON) | JSON shape checked CLI-side; server stores as-is | runtime-specific config; defaults to `{}` |
 | `custom_env` | `agent.custom_env` (JSON object) | — | daemon (process env); see Env & secrets |
@@ -89,10 +92,18 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
 | `max_concurrent_tasks` | `agent.max_concurrent_tasks` | — | scheduler task cap; defaults to `6` |
 
 Defaults when omitted: `runtime_config` → `{}`, `custom_env` → `{}`,
-`custom_args` → `[]`, `visibility` → `private`, `max_concurrent_tasks` → `6`
+`custom_args` → `[]`, `execution_mode` → `normal`,
+`visibility` → `private`, `max_concurrent_tasks` → `6`
 (all materialized server-side before the insert). `custom_args`/`runtime_config`
 are typed `[]string`/`any` and marshaled as-is — the JSON-shape rejection
 happens in the CLI, not the create handler.
+
+`execution_mode` is a Multica-level agent execution contract, not provider
+private runtime config. `normal` keeps the historical behavior. `goal` is stored
+for every agent and forwarded at claim time; current provider implementations
+honor it for Claude Code and Codex. Invalid values return 400 on create/update.
+The CLI does not currently expose a dedicated flag for this field, so set it
+through the API or UI.
 
 `thinking_level` is validated only at the provider level: an unrecognized
 literal returns 400, but a value that is valid for the provider yet
@@ -225,6 +236,8 @@ State-changing (require an explicit instruction — do not run speculatively):
   `custom_env_key_count`.
 - "An invalid `thinking_level`/`model` combo is caught at create." Only an
   unknown provider-level literal is — model-specific gaps fail at run time.
+- "`execution_mode` belongs in `runtime_config`." It does not — it is a
+  top-level, cross-provider Multica execution contract.
 - "`set` and `add` are interchangeable for skills." `set` replaces all
   bindings; using it when you meant `add` silently removes capabilities.
 

@@ -144,6 +144,7 @@
     "section_skills": "Skills",
     "section_integrations": "外部集成",
     "prop_runtime": "运行时",
+    "prop_execution_mode": "执行模式",
     "prop_model": "模型",
     "prop_thinking": "思考",
     "prop_visibility": "可见性",
@@ -177,6 +178,17 @@
     "runtime_offline": "离线",
     "runtime_owned_by": "{{name}} 的",
     "runtime_empty": "暂无运行时",
+    "execution_mode_tooltip": "执行模式 路 {{value}}",
+    "execution_mode": {
+      "normal": {
+        "label": "Normal",
+        "description": "使用当前 task 提示运行一次 provider 回合。"
+      },
+      "goal": {
+        "label": "Goal",
+        "description": "持续执行，直到 task 目标完成或明确阻塞。"
+      }
+    },
     "model_default": "默认",
     "model_tooltip": "模型 · {{value}}",
     "model_managed_by_runtime": "由运行时管理",

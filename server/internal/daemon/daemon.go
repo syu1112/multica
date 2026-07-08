@@ -3527,8 +3527,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		model = entry.Model
 	}
 	thinkingLevel := ""
+	executionMode := ""
 	if task.Agent != nil {
 		thinkingLevel = task.Agent.ThinkingLevel
+		executionMode = task.Agent.ExecutionMode
 	}
 	// Per-model guard: the server validates the literal token against the
 	// provider's enum, but per-model gaps (Claude's `xhigh` on a non-Opus
@@ -3568,6 +3570,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ExtraArgs:                 extraArgs,
 		CustomArgs:                customArgs,
 		McpConfig:                 mcpConfig,
+		ExecutionMode:             executionMode,
 		ThinkingLevel:             thinkingLevel,
 		OpenclawMode:              openclawMode,
 	}

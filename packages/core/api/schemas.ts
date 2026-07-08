@@ -758,6 +758,12 @@ export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
 
 export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
 
+const AgentExecutionModeSchema = z
+  .enum(["normal", "goal"])
+  .optional()
+  .catch("normal")
+  .default("normal");
+
 export const AgentSchema = z.object({
   id: StringWithDefaultSchema(),
   workspace_id: StringWithDefaultSchema(),
@@ -779,6 +785,7 @@ export const AgentSchema = z.object({
   status: StringWithDefaultSchema("idle"),
   max_concurrent_tasks: NumberWithDefaultSchema(1),
   model: StringWithDefaultSchema(),
+  execution_mode: AgentExecutionModeSchema,
   thinking_level: StringWithDefaultSchema().optional(),
   owner_id: NullableStringSchema,
   skills: z.array(AgentSkillSummarySchema).default([]),
@@ -807,6 +814,7 @@ export const EMPTY_AGENT: Agent = {
   status: "idle",
   max_concurrent_tasks: 1,
   model: "",
+  execution_mode: "normal",
   owner_id: null,
   skills: [],
   created_at: "",

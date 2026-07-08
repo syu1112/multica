@@ -4,6 +4,7 @@ export type {
   AgentStatus,
   AgentRuntimeMode,
   AgentVisibility,
+  AgentExecutionMode,
   AgentTask,
   AgentActivityBucket,
   AgentRunCount,

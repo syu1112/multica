@@ -1060,6 +1060,65 @@ func TestCodexStartOrResumeThreadNameFailureDoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestCodexTrySetThreadGoalSendsGoalForGoalMode(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+
+	wait := drainRPCScript(t, c, fs, []rpcResponse{
+		{
+			method: "thread/goal/set",
+			result: json.RawMessage(`{}`),
+			assertFn: func(t *testing.T, params map[string]any) {
+				if params["threadId"] != "thr_goal" {
+					t.Errorf("threadId = %v, want thr_goal", params["threadId"])
+				}
+				if params["objective"] != "Fix the flaky tests" {
+					t.Errorf("objective = %v, want task prompt", params["objective"])
+				}
+				if params["status"] != "active" {
+					t.Errorf("status = %v, want active", params["status"])
+				}
+				if _, ok := params["tokenBudget"]; !ok {
+					t.Error("expected tokenBudget key to be present")
+				}
+			},
+		},
+	})
+	defer wait()
+
+	c.trySetThreadGoal(context.Background(), "thr_goal", "Fix the flaky tests", ExecOptions{ExecutionMode: "goal"}, slog.Default())
+}
+
+func TestCodexTrySetThreadGoalNoopsForNormalMode(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+
+	c.trySetThreadGoal(context.Background(), "thr_normal", "Fix the flaky tests", ExecOptions{ExecutionMode: "normal"}, slog.Default())
+
+	if lines := fs.Lines(); len(lines) != 0 {
+		t.Fatalf("normal mode should not send thread/goal/set, got %v", lines)
+	}
+}
+
+func TestCodexTrySetThreadGoalFailureDoesNotBlock(t *testing.T) {
+	t.Parallel()
+
+	c, fs, _ := newTestCodexClient(t)
+
+	wait := drainRPCScript(t, c, fs, []rpcResponse{
+		{
+			method:  "thread/goal/set",
+			errMsg:  "method not found",
+			errCode: -32601,
+		},
+	})
+	defer wait()
+
+	c.trySetThreadGoal(context.Background(), "thr_goal", "Fix the flaky tests", ExecOptions{ExecutionMode: "goal"}, slog.Default())
+}
+
 func TestCodexStartOrResumeThreadResumesPriorThread(t *testing.T) {
 	t.Parallel()
 

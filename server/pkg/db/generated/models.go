@@ -46,6 +46,7 @@ type Agent struct {
 	ThinkingLevel      pgtype.Text        `json:"thinking_level"`
 	RuntimeProvider    string             `json:"runtime_provider"`
 	RuntimeProfileID   pgtype.UUID        `json:"runtime_profile_id"`
+	ExecutionMode      string             `json:"execution_mode"`
 }
 
 type AgentRuntime struct {

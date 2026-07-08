@@ -149,6 +149,7 @@
     "section_skills": "Skills",
     "section_integrations": "Integrations",
     "prop_runtime": "Runtime",
+    "prop_execution_mode": "Execution mode",
     "prop_model": "Model",
     "prop_thinking": "Thinking",
     "prop_visibility": "Visibility",
@@ -182,6 +183,17 @@
     "runtime_offline": "offline",
     "runtime_owned_by": "owned by {{name}}",
     "runtime_empty": "No runtimes",
+    "execution_mode_tooltip": "Execution mode 路 {{value}}",
+    "execution_mode": {
+      "normal": {
+        "label": "Normal",
+        "description": "Run one provider turn with the current task prompt."
+      },
+      "goal": {
+        "label": "Goal",
+        "description": "Work until the task objective is completed or blocked."
+      }
+    },
     "model_default": "Default",
     "model_tooltip": "Model · {{value}}",
     "model_managed_by_runtime": "Managed by runtime",

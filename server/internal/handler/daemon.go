@@ -1346,6 +1346,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			CustomArgs:    customArgs,
 			McpConfig:     mcpConfig,
 			Model:         agent.Model.String,
+			ExecutionMode: agent.ExecutionMode,
 			ThinkingLevel: agent.ThinkingLevel.String,
 			RuntimeConfig: runtimeConfig,
 		}

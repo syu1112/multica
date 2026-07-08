@@ -41,6 +41,7 @@ import { availabilityConfig } from "../presence";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
 import { ConcurrencyPicker } from "./inspector/concurrency-picker";
+import { ExecutionModePicker } from "./inspector/execution-mode-picker";
 import { ModelPicker } from "./inspector/model-picker";
 import { RuntimePicker } from "./inspector/runtime-picker";
 import { SkillAttach } from "./inspector/skill-attach";
@@ -137,6 +138,13 @@ export function AgentDetailInspector({
                 runtime_profile_id: next.profile_id ?? null,
               });
             }}
+          />
+        </PropRow>
+        <PropRow label={t(($) => $.inspector.prop_execution_mode)} interactive={false}>
+          <ExecutionModePicker
+            value={agent.execution_mode ?? "normal"}
+            canEdit={canEdit}
+            onChange={(mode) => update({ execution_mode: mode })}
           />
         </PropRow>
         <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>

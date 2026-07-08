@@ -136,6 +136,7 @@
     "section_skills": "スキル",
     "section_integrations": "連携",
     "prop_runtime": "ランタイム",
+    "prop_execution_mode": "実行モード",
     "prop_model": "モデル",
     "prop_thinking": "思考",
     "prop_visibility": "公開範囲",
@@ -169,6 +170,17 @@
     "runtime_offline": "オフライン",
     "runtime_owned_by": "{{name}} が所有",
     "runtime_empty": "ランタイムなし",
+    "execution_mode_tooltip": "実行モード 路 {{value}}",
+    "execution_mode": {
+      "normal": {
+        "label": "Normal",
+        "description": "現在の task プロンプトで provider を 1 ターン実行します。"
+      },
+      "goal": {
+        "label": "Goal",
+        "description": "task 目標が完了またはブロックされるまで実行します。"
+      }
+    },
     "model_default": "デフォルト",
     "model_tooltip": "モデル · {{value}}",
     "model_managed_by_runtime": "ランタイムで管理",

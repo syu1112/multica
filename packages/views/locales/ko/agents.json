@@ -149,6 +149,7 @@
     "section_skills": "스킬",
     "section_integrations": "연동",
     "prop_runtime": "런타임",
+    "prop_execution_mode": "실행 모드",
     "prop_model": "모델",
     "prop_thinking": "추론",
     "prop_visibility": "공개 범위",
@@ -182,6 +183,17 @@
     "runtime_offline": "오프라인",
     "runtime_owned_by": "{{name}} 소유",
     "runtime_empty": "런타임 없음",
+    "execution_mode_tooltip": "실행 모드 路 {{value}}",
+    "execution_mode": {
+      "normal": {
+        "label": "Normal",
+        "description": "현재 task 프롬프트로 provider 턴을 한 번 실행합니다."
+      },
+      "goal": {
+        "label": "Goal",
+        "description": "task 목표가 완료되거나 차단될 때까지 실행합니다."
+      }
+    },
     "model_default": "기본값",
     "model_tooltip": "모델 · {{value}}",
     "model_managed_by_runtime": "런타임에서 관리",

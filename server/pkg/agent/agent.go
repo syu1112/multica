@@ -36,6 +36,11 @@ type ExecOptions struct {
 	ExtraArgs                 []string        // daemon-wide default CLI arguments appended before CustomArgs; currently read by claude and codex backends only
 	CustomArgs                []string        // per-agent CLI arguments appended after ExtraArgs
 	McpConfig                 json.RawMessage // if non-nil, MCP server config to pass via --mcp-config
+	// ExecutionMode chooses the provider-level task execution contract.
+	// "" and "normal" keep the historical one-turn behavior; "goal" asks
+	// providers with goal support to continue until the task objective is
+	// genuinely handled, falling back to a prompt contract where needed.
+	ExecutionMode string
 	// ThinkingLevel is the runtime-native reasoning/effort value (e.g.
 	// Claude's "low|medium|high|xhigh|max", Codex's "none|minimal|low|
 	// medium|high|xhigh", OpenCode's model variant names). Empty means

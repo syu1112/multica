@@ -337,6 +337,8 @@ func TestCreatingAgentsSkillCoversAgentCreationContracts(t *testing.T) {
 		"`instructions` is the runtime behavior contract",
 		"multica agent create --name <name> --runtime-provider <provider>",
 		"`model` is a first-class persisted column",
+		"`execution_mode`",
+		"`goal`",
 		"custom_env",
 		"--custom-env-stdin",
 		"--custom-env-file",

@@ -5,8 +5,10 @@ node_modules
 # Build outputs
 .next
 dist
+.cache
 server/bin
 server/tmp
+server/.tmp-*
 
 # Git
 .git
