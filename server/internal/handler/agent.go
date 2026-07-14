@@ -239,6 +239,7 @@ type AgentTaskResponse struct {
 	// shared context. Empty when the workspace owner hasn't set it.
 	WorkspaceContext string                `json:"workspace_context,omitempty"`
 	ThreadName       string                `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	ExecutionMode    string                `json:"execution_mode"`
 	Status           string                `json:"status"`
 	Priority         int32                 `json:"priority"`
 	DispatchedAt     *string               `json:"dispatched_at"`
@@ -387,6 +388,7 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		RuntimeID:        uuidToString(t.RuntimeID),
 		IssueID:          uuidToString(t.IssueID),
 		WorkspaceID:      workspaceID,
+		ExecutionMode:    taskResponseExecutionMode(t.ExecutionMode),
 		Status:           t.Status,
 		Priority:         t.Priority,
 		DispatchedAt:     timestampToPtr(t.DispatchedAt),
@@ -410,6 +412,13 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		AutopilotRunID: uuidToString(t.AutopilotRunID),
 		Kind:           computeTaskKind(t),
 	}
+}
+
+func taskResponseExecutionMode(mode string) string {
+	if mode == "goal" {
+		return "goal"
+	}
+	return "normal"
 }
 
 func taskToAuditResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
@@ -501,12 +510,44 @@ func relativeWorkDir(workDir, workspaceID, taskID string) string {
 			return normalized[idx:]
 		}
 	}
+	if workspaceID != "" {
+		if suffix, ok := managedWorkspaceWorkDirSuffix(normalized, workspaceID); ok {
+			return suffix
+		}
+	}
 
 	if stripped, ok := stripHomePrefix(normalized); ok {
 		return stripped
 	}
 
 	return basename(normalized)
+}
+
+func managedWorkspaceWorkDirSuffix(normalized, workspaceID string) (string, bool) {
+	idx := strings.Index(normalized, workspaceID+"/")
+	if idx < 0 {
+		return "", false
+	}
+	suffix := normalized[idx:]
+	rest := strings.TrimPrefix(suffix, workspaceID+"/")
+	dir, _, _ := strings.Cut(rest, "/")
+	if !isShortHexID(dir) {
+		return "", false
+	}
+	return suffix, true
+}
+
+func isShortHexID(s string) bool {
+	if len(s) != 8 {
+		return false
+	}
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // shortTaskID mirrors execenv.shortID — first 8 hex chars of the UUID

@@ -148,13 +148,14 @@ ORDER BY created_at DESC;
 -- name: CreateAgentTask :one
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
-    trigger_summary, force_fresh_session, is_leader_task
+    trigger_summary, force_fresh_session, is_leader_task, execution_mode
 )
 VALUES (
     $1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id),
     sqlc.narg(trigger_summary),
     COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
-    COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE)
+    COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE),
+    COALESCE(sqlc.narg('execution_mode')::text, 'normal')
 )
 RETURNING *;
 
@@ -162,8 +163,8 @@ RETURNING *;
 -- Quick-create tasks have no issue / chat / autopilot link; the entire job
 -- description (prompt, requester, workspace) lives in context JSONB. The
 -- daemon detects this variant via context.type == "quick_create".
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context)
-VALUES ($1, $2, NULL, 'queued', $3, $4)
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context, execution_mode)
+VALUES ($1, $2, NULL, 'queued', $3, $4, COALESCE(sqlc.narg('execution_mode')::text, 'normal'))
 RETURNING *;
 
 -- name: LinkTaskToIssue :exec
@@ -191,7 +192,8 @@ INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, chat_session_id, autopilot_run_id,
     status, priority, trigger_comment_id, trigger_summary, context,
     session_id, work_dir,
-    attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task
+    attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task,
+    execution_mode
 )
 SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
@@ -200,7 +202,8 @@ SELECT
     CASE WHEN p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity' THEN NULL ELSE p.work_dir END,
     p.attempt + 1, p.max_attempts, p.id,
     p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity',
-    p.is_leader_task
+    p.is_leader_task,
+    p.execution_mode
 FROM agent_task_queue p
 WHERE p.id = $1
 RETURNING *;
@@ -411,6 +414,38 @@ WHERE agent_id = $1 AND issue_id = $2
   )
   AND session_id IS NOT NULL
 ORDER BY COALESCE(completed_at, started_at, dispatched_at, created_at) DESC
+LIMIT 1;
+
+-- name: GetLastGithubRepoIssueWorkDir :one
+-- Returns the most recent reusable work_dir for an issue on the claiming
+-- runtime, regardless of which agent produced it. This is a worktree reuse
+-- hint only: callers must not inherit session_id across agents.
+SELECT atq.work_dir, atq.runtime_id
+FROM issue i
+JOIN agent_task_queue atq
+  ON atq.issue_id = i.id
+ AND atq.runtime_id = sqlc.arg('runtime_id')
+WHERE i.id = sqlc.arg('issue_id')
+  AND i.workspace_id = sqlc.arg('workspace_id')
+  AND i.project_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM project_resource pr
+    WHERE pr.project_id = i.project_id
+      AND pr.workspace_id = i.workspace_id
+      AND pr.resource_type = 'github_repo'
+  )
+  AND atq.work_dir IS NOT NULL
+  AND atq.work_dir <> ''
+  AND (
+    atq.status = 'completed'
+    OR (
+      atq.status = 'failed'
+      AND COALESCE(atq.failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity')
+      AND NOT (COALESCE(atq.error, '') ILIKE '%400%' AND COALESCE(atq.error, '') ILIKE '%invalid_request_error%')
+    )
+  )
+ORDER BY COALESCE(atq.completed_at, atq.started_at, atq.dispatched_at, atq.created_at) DESC
 LIMIT 1;
 
 -- name: GetLastTaskStartedAtForIssueAndAgent :one
