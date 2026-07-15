@@ -1,0 +1,19 @@
+docs/release-guide.md
+  s_831b02f85610e2::t_02b7831ed8ff3e 83-87,94-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "2e937c9501a64bd4d9f1c17b6cd6a52bba7adb42",
+  "prompts": {},
+  "sessions": {
+    "s_831b02f85610e2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5e44-1292-7a82-a059-55f81e223235",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "eddie.pan2 <eddie.pan2@jtexpress.com>"
+    }
+  }
+}
