@@ -11,6 +11,7 @@ import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 import { toast } from "sonner";
 import { ApiError } from "@multica/core/api";
+import { useIssueDetailViewStore } from "@multica/core/issues/stores/detail-view-store";
 
 const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 
@@ -481,12 +482,15 @@ function createTestQueryClient() {
   });
 }
 
-function renderIssueDetail(issueId = "issue-1") {
+function renderIssueDetail(
+  issueId = "issue-1",
+  options: { contentWidthToggleEnabled?: boolean } = {},
+) {
   const queryClient = createTestQueryClient();
   return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
-        <IssueDetail issueId={issueId} />
+        <IssueDetail issueId={issueId} {...options} />
       </QueryClientProvider>
     </I18nProvider>,
   );
@@ -524,6 +528,7 @@ describe("IssueDetail (shared)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockViewport.isMobile = false;
+    useIssueDetailViewStore.setState({ contentWidth: "default" });
     // Default: issue loads successfully
     mockApiObj.getIssue.mockResolvedValue(mockIssue);
     // /timeline returns the entries flat in chronological order (oldest first).
@@ -1199,6 +1204,7 @@ describe("IssueDetail (shared)", () => {
   });
 
   it("uses a non-resizable layout with the sidebar sheet closed by default on mobile", async () => {
+    useIssueDetailViewStore.getState().setContentWidth("wide");
     mockViewport.isMobile = true;
 
     renderIssueDetail();
@@ -1209,6 +1215,70 @@ describe("IssueDetail (shared)", () => {
 
     expect(screen.queryByTestId("panel-group")).not.toBeInTheDocument();
     expect(screen.queryByText("Properties")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Restore default content width" }),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector("[data-content-width]"))
+      .toHaveAttribute("data-content-width", "default");
+  });
+
+  it("switches the full detail document between default and wide widths without remounting it", async () => {
+    renderIssueDetail();
+
+    const enableButton = await screen.findByRole("button", {
+      name: "Use wide content width",
+    });
+    const content = document.querySelector<HTMLElement>("[data-content-width]");
+    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]");
+    const titleInput = screen.getByDisplayValue("Implement authentication");
+
+    expect(content).toHaveAttribute("data-content-width", "default");
+    expect(content).toHaveClass("max-w-4xl");
+    expect(content).not.toHaveClass("max-w-none");
+
+    fireEvent.click(enableButton);
+
+    expect(content).toHaveAttribute("data-content-width", "wide");
+    expect(content).toHaveClass("max-w-none");
+    expect(content).not.toHaveClass("max-w-4xl");
+    expect(screen.getByRole("button", {
+      name: "Restore default content width",
+    })).toBeInTheDocument();
+    expect(document.querySelector("[data-tab-scroll-root]")).toBe(scrollRoot);
+    expect(screen.getByDisplayValue("Implement authentication")).toBe(titleInput);
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Restore default content width",
+    }));
+
+    expect(content).toHaveAttribute("data-content-width", "default");
+    expect(content).toHaveClass("max-w-4xl");
+  });
+
+  it("keeps embedded issue details at the default width and hides the toggle", async () => {
+    useIssueDetailViewStore.getState().setContentWidth("wide");
+    renderIssueDetail("issue-1", { contentWidthToggleEnabled: false });
+
+    await screen.findByDisplayValue("Implement authentication");
+
+    expect(screen.queryByRole("button", {
+      name: "Restore default content width",
+    })).not.toBeInTheDocument();
+    expect(document.querySelector("[data-content-width]"))
+      .toHaveAttribute("data-content-width", "default");
+    expect(useIssueDetailViewStore.getState().contentWidth).toBe("wide");
+  });
+
+  it("uses the stored width for the loading skeleton", () => {
+    useIssueDetailViewStore.getState().setContentWidth("wide");
+    mockApiObj.getIssue.mockReturnValue(new Promise(() => {}));
+
+    renderIssueDetail();
+
+    expect(document.querySelector("[data-content-width]"))
+      .toHaveAttribute("data-content-width", "wide");
+    expect(document.querySelector("[data-content-width]"))
+      .toHaveClass("max-w-none");
   });
 
   it("hides metadata content from the sidebar and shows a button when the bag has keys", async () => {

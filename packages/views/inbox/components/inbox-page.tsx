@@ -297,6 +297,7 @@ export function InboxPage() {
         issueId={selected.issue_id}
         defaultSidebarOpen={false}
         layoutId="multica_inbox_issue_detail_layout"
+        contentWidthToggleEnabled={false}
         highlightCommentId={selected.details?.comment_id ?? undefined}
         onDelete={() => {
           // Issue deletion CASCADE-deletes the inbox item server-side, and the

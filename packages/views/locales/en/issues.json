@@ -230,6 +230,8 @@
     "pin_tooltip": "Pin to sidebar",
     "unpin_tooltip": "Unpin from sidebar",
     "sidebar_tooltip": "Toggle sidebar",
+    "enable_wide_content": "Use wide content width",
+    "restore_default_content_width": "Restore default content width",
     "cmdf_toast_title": "Find on page only covers what's visible",
     "cmdf_toast_description": "The timeline is virtualized — ⌘F can't see off-screen comments. Full in-app search is coming.",
     "update_failed": "Failed to update issue",

@@ -15,6 +15,8 @@ import {
   ChevronRight,
   CircleCheck,
   Code2,
+  Maximize2,
+  Minimize2,
   MoreHorizontal,
   PanelRight,
   Pin,
@@ -73,6 +75,7 @@ import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import { useRecentIssuesStore } from "@multica/core/issues/stores";
+import { useIssueDetailViewStore } from "@multica/core/issues/stores/detail-view-store";
 import { useIssueSelectionStore } from "@multica/core/issues/stores/selection-store";
 import { BatchActionToolbar } from "./batch-action-toolbar";
 import { useIssueTimeline } from "../hooks/use-issue-timeline";
@@ -655,6 +658,8 @@ interface IssueDetailProps {
   onDone?: () => void;
   defaultSidebarOpen?: boolean;
   layoutId?: string;
+  /** Whether this surface exposes the desktop content-width preference. */
+  contentWidthToggleEnabled?: boolean;
   /** When set, the issue detail will auto-scroll to this comment and briefly highlight it. */
   highlightCommentId?: string;
 }
@@ -783,7 +788,15 @@ function OpenIssueInIntelliJButton({
 // IssueDetail
 // ---------------------------------------------------------------------------
 
-export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId }: IssueDetailProps) {
+export function IssueDetail({
+  issueId,
+  onDelete,
+  onDone,
+  defaultSidebarOpen = true,
+  layoutId = "multica_issue_detail_layout",
+  contentWidthToggleEnabled = true,
+  highlightCommentId,
+}: IssueDetailProps) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
   const id = issueId;
@@ -810,6 +823,18 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   });
   const sidebarRef = usePanelRef();
   const isMobile = useIsMobile();
+  const storedContentWidth = useIssueDetailViewStore((state) => state.contentWidth);
+  const toggleContentWidth = useIssueDetailViewStore(
+    (state) => state.toggleContentWidth,
+  );
+  const canToggleContentWidth = contentWidthToggleEnabled && !isMobile;
+  const effectiveContentWidth = canToggleContentWidth
+    ? storedContentWidth
+    : "default";
+  const contentContainerClassName = cn(
+    "mx-auto w-full px-8 py-8",
+    effectiveContentWidth === "wide" ? "max-w-none" : "max-w-4xl",
+  );
   const desktopSidebarInitialOpen = getAnimatedRightSidebarInitialOpen(
     defaultSidebarOpen,
     defaultLayout,
@@ -1468,7 +1493,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         </div>
         <div className="flex flex-1 min-h-0">
           <div className="flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-4xl px-8 py-8 space-y-6">
+            <div
+              data-content-width={effectiveContentWidth}
+              className={cn(contentContainerClassName, "space-y-6")}
+            >
               <Skeleton className="h-8 w-3/4" />
               <div className="space-y-2">
                 <Skeleton className="h-4 w-full" />
@@ -1961,6 +1989,32 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 </Button>
               }
             />
+            {canToggleContentWidth && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant={effectiveContentWidth === "wide" ? "secondary" : "ghost"}
+                      size="icon-sm"
+                      className={effectiveContentWidth === "wide" ? "" : "text-muted-foreground"}
+                      aria-label={
+                        effectiveContentWidth === "wide"
+                          ? t(($) => $.detail.restore_default_content_width)
+                          : t(($) => $.detail.enable_wide_content)
+                      }
+                      onClick={toggleContentWidth}
+                    >
+                      {effectiveContentWidth === "wide" ? <Minimize2 /> : <Maximize2 />}
+                    </Button>
+                  }
+                />
+                <TooltipContent side="bottom">
+                  {effectiveContentWidth === "wide"
+                    ? t(($) => $.detail.restore_default_content_width)
+                    : t(($) => $.detail.enable_wide_content)}
+                </TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1985,7 +2039,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           data-tab-scroll-root
           className="relative flex-1 overflow-y-auto"
         >
-        <div className="mx-auto w-full max-w-4xl px-8 py-8">
+        <div
+          data-content-width={effectiveContentWidth}
+          className={contentContainerClassName}
+        >
           <TitleEditor
             key={`title-${id}`}
             defaultValue={issue.title}
