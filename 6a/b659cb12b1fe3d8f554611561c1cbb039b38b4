@@ -1,0 +1,235 @@
+packages/views/agents/components/tabs/integrations-tab.tsx
+  s_deeaa96127a450::t_54f6f6350a82f3 52-55
+server/internal/handler/lark.go
+  s_831b02f85610e2::t_4cf66edcd42dc0 169-172,180-185,487-519
+  s_deeaa96127a450::t_cb4e7c31f3c8e2 29,70-72,77,333-337,356-358,361-362,365-366,390-420,426
+  s_deeaa96127a450::t_62ae44303fce7d 13
+  s_831b02f85610e2::t_7640e04361a746 86-93,121-123,130-134
+  s_831b02f85610e2::t_7b18f77f4e62fe 188-194,197
+  s_deeaa96127a450::t_1203388d04cc69 26-28,31-36,49-55,57-60,66-68,387-389,421-423,425,427-462,472
+  s_831b02f85610e2::t_71e99640b1ee89 30,73-76
+  s_deeaa96127a450::t_3e36c431312ae7 12,37,56,81-82,84-85,94-100,104-106,116-120,124-129
+docs/superpowers/runbooks/2026-07-14-member-personal-lark-bot-go-live.md
+  s_831b02f85610e2::t_6f3ec8ff08bab8 1-40
+server/pkg/db/queries/agent.sql
+  s_deeaa96127a450::t_a7240c06cb967e 25
+docs/superpowers/plans/2026-07-13-hide-runtime-bot.md
+  s_deeaa96127a450::t_933daf4a03cde4 19-23
+  s_deeaa96127a450::t_93555a2dcd73f3 1-18
+server/internal/integrations/lark/outbound_test.go
+  s_deeaa96127a450::t_1d2f36b07a0b77 107-108
+server/internal/integrations/lark/http_client_test.go
+  s_deeaa96127a450::t_4d3e3bd34d0230 413-458
+packages/core/api/client.ts
+  s_831b02f85610e2::t_bdf388d0fc2d39 129,139-140,142
+  s_deeaa96127a450::t_df37fb679b648c 141,2335,2356
+  s_deeaa96127a450::t_339e05a2cb3e43 2379-2387
+  s_deeaa96127a450::t_458b4cb855de7c 2388-2395
+  s_831b02f85610e2::t_0fc87d6a832907 2343-2351,2354-2355,2357
+  s_831b02f85610e2::t_765ae8613d0f70 2400-2409
+server/internal/integrations/lark/registration_service.go
+  s_deeaa96127a450::t_76d0d211ca2b01 132-134,218,296,337,353-370,395,600-610,637-638,684-685,690-732,738-744
+  s_831b02f85610e2::t_cfdbfdbf2469c6 220,298-301,336,397,623-633
+  s_831b02f85610e2::t_08a3e2563641d8 339-340
+  s_deeaa96127a450::t_e3a074a3e60df9 612,616-622,634-636
+  s_deeaa96127a450::t_969e77e742ec7c 221,302,335,338,351-352,371,381,398,611,613-615,639-646,686,746
+  s_831b02f85610e2::t_211ada74b6d3be 654-657,661
+  s_deeaa96127a450::t_d29ea09726084e 733-737
+docs/superpowers/plans/2026-07-13-lark-notification-event-settings.md
+  s_deeaa96127a450::t_dd3416d367eb79 1-459
+server/migrations/125_lark_inbox_notifications.up.sql
+  s_deeaa96127a450::t_61589e7b7dfb1f 1-2,31-48
+  s_deeaa96127a450::t_bb6e171a4b8dd2 3-30
+server/internal/integrations/lark/dispatcher_test.go
+  s_deeaa96127a450::t_f2b1c19775bee7 409-438,440,445-472,479-484
+  s_deeaa96127a450::t_831ab27b22451b 54,70,210-217,225-246
+  s_deeaa96127a450::t_cb9c41e6013af5 219-222
+  s_deeaa96127a450::t_9e4f8871d2f549 46-53,55-69,71-72
+  s_deeaa96127a450::t_a9f3ce3f7e82dd 73-89,439,441-444,473-478
+packages/views/settings/components/lark-notification-events.tsx
+  s_831b02f85610e2::t_4d65c76a90ba75 13,21-23,164,172-173,175,177,182,193,204
+  s_deeaa96127a450::t_469cc4c2eb0891 196-203,205-207
+  s_deeaa96127a450::t_e167cae47e380b 12
+  s_deeaa96127a450::t_ba7cac352d0466 1-2,4-11,14-20,24-145,148-149,151-153,161-162,165-171,178,181,183,194-195,208-221,224-227,229-254,256,258-260,262,264,269-293
+  s_deeaa96127a450::t_324e38dc84fb12 3,154-160,174,176,179-180,186-192
+  s_831b02f85610e2::t_38d5360ea4ad2b 146-147,150,163,184-185,223,228,263
+  s_deeaa96127a450::t_12296e43c8821b 222,255,257,261,265-268
+server/migrations/126_lark_runtime_installations.down.sql
+  s_deeaa96127a450::t_d7b6b86c10ea21 1-14
+packages/core/types/lark.ts
+  s_831b02f85610e2::t_0fc87d6a832907 59-60,75-79
+  s_831b02f85610e2::t_765ae8613d0f70 42-44
+  s_deeaa96127a450::t_9922b5574e867f 36
+  s_deeaa96127a450::t_df37fb679b648c 18-24
+  s_deeaa96127a450::t_f97553e06afd82 35,80
+server/internal/integrations/lark/notification_events_test.go
+  s_deeaa96127a450::t_27e763fa9b46c8 1-20,44-78
+  s_deeaa96127a450::t_c91b896c281f3c 21-43
+server/pkg/db/generated/models.go
+  s_deeaa96127a450::t_e5c5ff63063267 518-536
+  s_831b02f85610e2::t_9b513be0034d3e 537
+  s_831b02f85610e2::t_ca4221239a1a93 561-564
+  s_deeaa96127a450::t_5a33a4cd60347c 503-516
+packages/views/locales/ja/settings.json
+  s_deeaa96127a450::t_37944e080bd025 96-103,105-114
+  s_deeaa96127a450::t_7fe86bf0b8741b 292-303,307,347-348
+  s_deeaa96127a450::t_50be79737207ad 104
+  s_deeaa96127a450::t_ba7cac352d0466 115-149
+server/pkg/db/generated/lark.sql.go
+  s_deeaa96127a450::t_5a5871d645dc9d 61,399,662,700,735,773,881,971,1300,1303,1329,1349,1446,1470,1521
+  s_deeaa96127a450::t_5a33a4cd60347c 60,272-327,398,525-529,532-534,536-539,545-557,608-632,661,699,734,772,880,970,1061-1075,1299,1302,1426-1445,1449-1469,1471-1473,1475-1500,1520
+  s_831b02f85610e2::t_adb3a6d4a42bdc 524,530,535,543-544
+  s_831b02f85610e2::t_ca4221239a1a93 26,63,337,401,540-541,638,664,670,702,708,737,743,775,833-844,846,883,939,973,1243,1274,1316,1350-1425,1448,1474,1523,1527-1545
+  s_deeaa96127a450::t_e5c5ff63063267 62,400,531,542,663,701,736,774,882,972,1236-1242,1244-1273,1275-1278,1447,1522
+docs/superpowers/specs/2026-07-13-lark-notification-event-settings-design.md
+  s_deeaa96127a450::t_230916a2e7e35a 1-97
+server/migrations/125_lark_inbox_notifications.down.sql
+  s_deeaa96127a450::t_61589e7b7dfb1f 1
+  s_deeaa96127a450::t_f7945c061620ef 5
+  s_deeaa96127a450::t_186214ebc0f029 2-4,6-9
+server/migrations/128_lark_member_personal_bots.down.sql
+  s_831b02f85610e2::t_5e7301e2c797a1 1-29
+server/internal/integrations/lark/notification_events.go
+  s_deeaa96127a450::t_9df393f06af9b0 1-4,6-13,15-29,32-43,45-50
+packages/core/lark/schema.ts
+  s_831b02f85610e2::t_0fc87d6a832907 62,95
+  s_deeaa96127a450::t_9e8590ec59e0c2 67,90
+  s_831b02f85610e2::t_bdf388d0fc2d39 6,77-88
+  s_deeaa96127a450::t_df37fb679b648c 52-61,63-64,91-94,96
+  s_831b02f85610e2::t_71e99640b1ee89 44
+server/internal/integrations/lark/installation.go
+  s_831b02f85610e2::t_eabeb1354339c6 192-196
+  s_deeaa96127a450::t_9385383d789ef7 25,34-38,40-41,78-87,175,191,199
+  s_deeaa96127a450::t_4bbebeb8409334 23,104
+  s_831b02f85610e2::t_27318c9737df97 24,39,177-178
+  s_831b02f85610e2::t_25610733833f8e 89-100
+packages/views/locales/ko/settings.json
+  s_deeaa96127a450::t_01566fee15aed1 96-103,105-114
+  s_deeaa96127a450::t_ba7cac352d0466 115-149
+  s_deeaa96127a450::t_65be47f1dc9ec7 369-380,384,424-425
+  s_deeaa96127a450::t_c2d1ec1ce2bc07 104
+server/pkg/db/queries/lark.sql
+  s_deeaa96127a450::t_779c708d1f9957 39,42,58-77,79-82
+  s_deeaa96127a450::t_f45a259689011a 83,109-115,128,272,279
+  s_831b02f85610e2::t_275f7b6a14cb1a 84-108,116-127,269-271,278
+  s_deeaa96127a450::t_61e29037c5847a 40,43,78
+  s_deeaa96127a450::t_61589e7b7dfb1f 129,273-277,280-281,495-521
+server/internal/integrations/lark/inbox_notifier_test.go
+  s_831b02f85610e2::t_48b582a3bbe364 16-17,25,29,36,41-46
+  s_deeaa96127a450::t_5179b6fe17c6e7 292-293,295-300,333,335
+  s_deeaa96127a450::t_8f09e8eeef0964 4-5,10,13-15,18-24,26-28,32,34-35,37,40,47-48,50,53-57,59-63,65-69,72-98,101,104-107,109-114,119,126-164,179-181,197-200,210-228,230-241,257-264,267-271,294,301-307,309,311-332,334
+  s_deeaa96127a450::t_f23c1b8740a0d2 1-3,7-9,11-12,99-100,102-103,108,115-118,120,288-291
+  s_deeaa96127a450::t_b47254d04b208e 6,121-125,229,242-256,265,272,274,287
+  s_831b02f85610e2::t_ef5645f8a54d10 196,201-202,204-205,308,310
+  s_deeaa96127a450::t_d1a5a6455a872d 30-31,33,38-39,49,51-52,58,64,70-71,182-195,203,206-209,266,273,275-286
+packages/core/lark/client.test.ts
+  s_deeaa96127a450::t_b5d74e12c0563c 1-69,71-72
+  s_831b02f85610e2::t_15e1e7c555c653 70
+packages/views/locales/zh-Hans/settings.json
+  s_deeaa96127a450::t_5409a00f1dcfe0 291-308,344-349
+  s_deeaa96127a450::t_850d815e4805c8 96-103,105-114
+  s_deeaa96127a450::t_f5c3b02dea297e 104
+  s_deeaa96127a450::t_ba7cac352d0466 115-146,148-149
+  s_deeaa96127a450::t_324e38dc84fb12 147
+server/internal/handler/lark_test.go
+  s_deeaa96127a450::t_c91b896c281f3c 17,169-380
+server/migrations/126_lark_runtime_installations.up.sql
+  s_deeaa96127a450::t_aefd16bf3db176 1-16
+server/internal/integrations/lark/inbound_enricher_test.go
+  s_deeaa96127a450::t_d6f85711d5fcfa 81
+packages/views/locales/en/settings.json
+  s_deeaa96127a450::t_5d09f81a93a71c 104
+  s_deeaa96127a450::t_ba7cac352d0466 115-149
+  s_deeaa96127a450::t_0406627bb3a526 96-103,105-114
+  s_deeaa96127a450::t_92a8288a556268 292-303,307,347-348
+server/internal/integrations/lark/installation_test.go
+  s_831b02f85610e2::t_aebf23982a74bf 1-35
+docs/release-guide.md
+  s_831b02f85610e2::t_ea401c4f79305c 1-82,85-88,91-124
+  s_831b02f85610e2::t_02b7831ed8ff3e 83-84,89-90
+server/internal/integrations/lark/inbox_notifier.go
+  s_831b02f85610e2::t_0db25d40e1b544 26-27,45-58
+  s_deeaa96127a450::t_d8a52e159c4462 153,160-163,165,182-193,206-207,216-226,229-231
+  s_deeaa96127a450::t_507b610a9347c9 1-25,28-41,43-44,59-100,104-147,151-152,154-159,164,166,175-176,180-181,232-243,257-296,298-301,303-307,309-329
+  s_deeaa96127a450::t_9a3b340b6be84f 244-245,247-250,253-255
+  s_deeaa96127a450::t_cb9d68b65d4310 297,302,308
+server/migrations/128_lark_member_personal_bots.up.sql
+  s_831b02f85610e2::t_5e7301e2c797a1 1-54
+packages/views/settings/components/lark-tab.tsx
+  s_deeaa96127a450::t_38a192d064d6c2 157,209,211,292
+  s_deeaa96127a450::t_8955e96af2f419 18,42,44
+  s_deeaa96127a450::t_f1cb0e03518257 58-61,90,395
+  s_deeaa96127a450::t_7eea399e5c0e1e 98,113,158-169,171-174,176,178-181,183-190,192-197,289-291,293,385-394,412
+  s_deeaa96127a450::t_e849f55fa84940 413-440,442-565
+  s_deeaa96127a450::t_ba7cac352d0466 47
+  s_831b02f85610e2::t_f664634313f4ac 96-97,170,175,177,182,191,441
+  s_deeaa96127a450::t_f592bb320ea560 88-89,91,114-132,198-200,210,212-288,337,396-403,408-411
+  s_831b02f85610e2::t_70661cdcfac2a2 99-101,201-208
+  s_deeaa96127a450::t_9fd4e3a1204b78 1009-1010,1015,1017-1018,1053-1055,1194-1196,1199-1201
+  s_deeaa96127a450::t_f392a484f9d049 62,93-94,308,332,344,584-586,707-710
+packages/core/lark/schema.test.ts
+  s_deeaa96127a450::t_9e8590ec59e0c2 28-31
+  s_deeaa96127a450::t_df37fb679b648c 5,112,119
+  s_deeaa96127a450::t_b5d74e12c0563c 74-111,113-117,128-129
+  s_831b02f85610e2::t_15e1e7c555c653 123-127
+server/internal/integrations/lark/typing_indicator_test.go
+  s_deeaa96127a450::t_bc6e44507b19d1 45
+server/cmd/server/router.go
+  s_deeaa96127a450::t_9151a3c8c71841 261-268
+  s_deeaa96127a450::t_21e2f7ee76650f 34
+  s_831b02f85610e2::t_55aa7f025b562e 644-645
+  s_deeaa96127a450::t_3e36c431312ae7 650
+  s_deeaa96127a450::t_e4399c1e45ba0d 657
+  s_deeaa96127a450::t_90e9b81bcdbd67 230-241
+server/migrations/127_lark_notification_events.down.sql
+  s_deeaa96127a450::t_f45a259689011a 1-2
+docs/superpowers/plans/2026-07-14-member-personal-lark-bot.md
+  s_831b02f85610e2::t_bfa7e5fad3ff88 1-36
+server/internal/integrations/lark/outcome_replier.go
+  s_deeaa96127a450::t_e61375efe2138c 49,196-204,281-310
+server/internal/integrations/lark/http_client.go
+  s_deeaa96127a450::t_39c920cd732f07 323-361
+server/internal/integrations/lark/outcome_replier_test.go
+  s_deeaa96127a450::t_652b5555d3b7c1 57-58
+server/pkg/db/generated/agent.sql.go
+  s_deeaa96127a450::t_7b9bdf73a37827 763
+packages/views/settings/components/lark-notification-events.test.tsx
+  s_deeaa96127a450::t_155553cd8644c9 317,347,351,355,357
+  s_deeaa96127a450::t_457566e9a44d61 177-185
+  s_deeaa96127a450::t_7e88b8aa19ea49 1-6,9-176,186-214,232-238,240-276,278-283,324-333,349-350,374-375,377-380,382-396,409,441-442
+  s_deeaa96127a450::t_e167cae47e380b 7-8
+  s_deeaa96127a450::t_e974c27533040b 239
+  s_deeaa96127a450::t_b1f6d632b5ffb8 215-231
+  s_deeaa96127a450::t_53f2aa82332220 277,284-316,318-323,334-346,348,352-354,356,358-373,376,381,397-408,410-440
+docs/superpowers/specs/2026-07-14-member-personal-lark-bot-design.md
+  s_831b02f85610e2::t_bfa7e5fad3ff88 1-29
+server/migrations/127_lark_notification_events.up.sql
+  s_deeaa96127a450::t_f45a259689011a 1-8
+packages/core/lark/mutations.test.ts
+  s_deeaa96127a450::t_b5d74e12c0563c 1-2,4-29,33-42,46-54,58-64
+  s_deeaa96127a450::t_df37fb679b648c 3,30-32,43-45,55-57
+packages/views/settings/components/notifications-tab.tsx
+  s_deeaa96127a450::t_042306224a56fd 7-10
+server/internal/handler/comment.go
+  s_deeaa96127a450::t_9151a3c8c71841 1107-1110
+server/internal/integrations/lark/client.go
+  s_deeaa96127a450::t_39c920cd732f07 47-51,224-231,346-347
+packages/core/lark/index.ts
+  s_deeaa96127a450::t_df37fb679b648c 5
+  s_deeaa96127a450::t_9e8590ec59e0c2 4
+packages/views/settings/components/lark-tab.test.tsx
+  s_deeaa96127a450::t_53f2aa82332220 808-832
+  s_deeaa96127a450::t_e87a8121340756 766-776
+  s_deeaa96127a450::t_7e88b8aa19ea49 148-163,777-804,833-851
+server/internal/integrations/lark/dispatcher.go
+  s_deeaa96127a450::t_a804cb77512f6a 8,13,16,110-115,145,206-209,462-468,594-671,675-708
+  s_deeaa96127a450::t_9151a3c8c71841 163-168,224,672-674
+  s_deeaa96127a450::t_34977a051c25d7 219-223,225
+  s_deeaa96127a450::t_90cf6041b31926 471-473
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "6ab659cb12b1fe3d8f554611561c1cbb039b38b4",
+  "prompts": {}
+}
